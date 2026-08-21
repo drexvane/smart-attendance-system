@@ -1,10 +1,26 @@
-name: CD Pipeline
+name: CD
+
+# This workflow used to report successful production deployments that never happened.
+# `deploy-production` consisted of `echo "Deploying version ... to production..."` inside
+# a GitHub environment whose URL was `https://example.com`, and the release build's test
+# step was `pytest tests/ -v || echo "Tests completed"` *plus* `continue-on-error: true`,
+# so a release could be cut over a red suite.
+#
+# It is now honest about what it does:
+#
+#   * the release artifact is built only over green gates -- lint, types and the full
+#     test suite, with no `|| true` anywhere;
+#   * the deployment steps are labelled DRY RUN, because that is what they are.  The
+#     block marked `REAL DEPLOYMENT GOES HERE` is where a target plugs in;
+#   * environment URLs are gone rather than pointing at example.com;
+#   * `concurrency` per environment, so two overlapping runs cannot deploy past each
+#     other;
+#   * `softprops/action-gh-release` is pinned to a SHA and no longer a floating `@v1`.
 
 on:
   push:
     branches: [master, main]
-    tags:
-      - 'v*'
+    tags: ['v*']
   release:
     types: [published]
   workflow_dispatch:
@@ -14,113 +30,236 @@ on:
         required: true
         default: 'staging'
         type: choice
-        options:
-          - staging
-          - production
+        options: [staging, production]
 
 env:
-  PYTHON_VERSION: '3.10'
+  PYTHON_VERSION: '3.12'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: Build Release
+  # The quality gates run here rather than being inherited from ci.yml: a `workflow_run`
+  # dependency would decouple the artifact from the commit that was actually tested, and
+  # a tag push does not always have a completed CI run of its own to point at.  Same
+  # gates, same commit, in the job that produces the thing being shipped.
+  gate:
+    name: Quality gates
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Get version
-        id: version
-        run: |
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/}
-          else
-            VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev-${{ github.sha }}")
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
-      
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      
-      - name: Run tests
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install OpenCV runtime libraries
         run: |
-          pip install pytest
-          pytest tests/ -v || echo "Tests completed"
-        continue-on-error: true
-      
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy app/
+
+      # No `|| echo`, no continue-on-error.  A release must not be built on unknown
+      # test state -- that was the single worst line in the previous version of this file.
+      - name: pytest
+        env:
+          FLASK_ENV: testing
+        run: pytest -q --cov=app --cov-fail-under=75
+
+  build:
+    name: Build release artifact
+    runs-on: ubuntu-latest
+    needs: gate
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact: ${{ steps.version.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0  # git describe needs the tag history
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev-${GITHUB_SHA::12}")"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "artifact=smart-attendance-system-$VERSION.zip" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install OpenCV runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      # The package is worthless if it cannot be imported. Gating, unlike the old
+      # equivalent in ci.yml which was suffixed `|| true`.
+      - name: Application imports
+        env:
+          SECRET_KEY: ci-only-not-a-real-secret
+        run: python -c "from wsgi import app; print('imported', app.name)"
+
       - name: Create release package
         run: |
+          set -euo pipefail
           mkdir -p dist
-          zip -r dist/smart-attendance-system-${{ steps.version.outputs.version }}.zip . \
-            -x "*.git*" -x "*__pycache__*" -x "*.pyc" -x "dist/*" -x "*.log" -x "instance/*" -x ".env*" -x "*.db" -x "tests/*" -x ".github/*"
-      
+          zip -r "dist/${{ steps.version.outputs.artifact }}" . \
+            -x '*.git*' '*__pycache__*' '*.pyc' 'dist/*' '*.log' 'instance/*' \
+               '.env*' '*.db' 'tests/*' '.venv/*' '.mypy_cache/*' '.ruff_cache/*' \
+               '.pytest_cache/*' 'face_data/*' 'student_images/*' 'exports/*'
+          # migrations/ and models/ are deliberately kept: a deploy runs `flask db
+          # upgrade`, and the DNN detector needs the caffemodel or it silently falls
+          # back to a Haar cascade.
+          unzip -l "dist/${{ steps.version.outputs.artifact }}" | grep -E 'migrations/|models/' | head
+
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ steps.version.outputs.version }}
           path: dist/
+          retention-days: 30
 
   deploy-staging:
-    name: Deploy to Staging
+    name: Deploy to staging (dry run)
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
+    if: >-
+      github.ref == 'refs/heads/master' ||
+      github.ref == 'refs/heads/main' ||
+      github.event.inputs.environment == 'staging'
     environment:
       name: staging
-      url: https://staging.example.com
+      # No `url:` until one exists. It pointed at https://staging.example.com, which
+      # rendered a link to nothing in every deployment record.
+    # Serialised per environment: two runs must not deploy past each other, and the
+    # later one must not be cancelled halfway through a partial rollout.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-${{ needs.build.outputs.version }}
           path: dist/
-      
-      - name: Deploy to staging
+
+      - name: DRY RUN - staging deployment
         run: |
-          echo "Deploying version ${{ needs.build.outputs.version }} to staging..."
-          echo "Package: dist/smart-attendance-system-${{ needs.build.outputs.version }}.zip"
-      
-      - name: Notify deployment
-        run: |
-          echo "Staging deployment complete!"
-          echo "Version: ${{ needs.build.outputs.version }}"
+          set -euo pipefail
+          echo "::notice::DRY RUN. Nothing is deployed by this workflow."
+          echo "Version:  ${{ needs.build.outputs.version }}"
+          echo "Artifact: dist/${{ needs.build.outputs.artifact }}"
+          echo "Image:    ghcr.io/${{ github.repository }}:${{ github.sha }} (published by docker.yml)"
+          test -f "dist/${{ needs.build.outputs.artifact }}"
+          echo "Artifact present and readable:"
+          ls -lh dist/
+
+          # ---------------------------------------------------------------------------
+          # REAL DEPLOYMENT GOES HERE.
+          #
+          # Whatever the target is, a deployment of this application must:
+          #   1. set SECRET_KEY, DATABASE_URL and RATELIMIT_STORAGE_URI (Redis, not
+          #      memory://, which is per-process and silently does not limit);
+          #   2. run `flask --app wsgi db upgrade` *before* starting the new process;
+          #   3. mount instance/, face_data/, student_images/ and logs/ as persistent
+          #      volumes -- they are state that must outlive the container;
+          #   4. keep gunicorn at one worker while the camera is in-process (see
+          #      gunicorn.conf.py), so scale by adding hosts, not workers;
+          #   5. poll /healthz until it reports {"database": "ok"} before shifting
+          #      traffic, and roll back if it does not.
+          #
+          # e.g.
+          #   ssh "$DEPLOY_HOST" 'docker compose pull && docker compose up -d --wait'
+          # ---------------------------------------------------------------------------
 
   deploy-production:
-    name: Deploy to Production
+    name: Deploy to production (dry run)
     runs-on: ubuntu-latest
     needs: [build, deploy-staging]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event.inputs.environment == 'production'
     environment:
       name: production
-      url: https://example.com
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: write  # the release step attaches the artifact to a tag
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-${{ needs.build.outputs.version }}
           path: dist/
-      
-      - name: Deploy to production
-        run: echo "Deploying version ${{ needs.build.outputs.version }} to production..."
-      
+
+      - name: DRY RUN - production deployment
+        run: |
+          set -euo pipefail
+          echo "::notice::DRY RUN. Nothing is deployed by this workflow."
+          echo "Version:  ${{ needs.build.outputs.version }}"
+          echo "Artifact: dist/${{ needs.build.outputs.artifact }}"
+          echo "Image:    ghcr.io/${{ github.repository }}:${{ github.sha }} (published by docker.yml)"
+          test -f "dist/${{ needs.build.outputs.artifact }}"
+
+          # REAL DEPLOYMENT GOES HERE -- same five requirements as staging, against the
+          # production target, and ideally behind a manual approval on this environment.
+
+      # This part is real: the artifact is genuinely attached to the tag.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          files: dist/smart-attendance-system-${{ needs.build.outputs.version }}.zip
+          files: dist/${{ needs.build.outputs.artifact }}
           generate_release_notes: true
           draft: false
-      
-      - name: Notify deployment
+          fail_on_unmatched_files: true
+
+      - name: Summary
         run: |
-          echo "Production deployment complete!"
-          echo "Version: ${{ needs.build.outputs.version }}"
+          {
+            echo "### CD run for ${{ needs.build.outputs.version }}"
+            echo
+            echo "| Stage | Result |"
+            echo "| --- | --- |"
+            echo "| Quality gates | passed (lint, mypy, pytest) |"
+            echo "| Artifact | \`${{ needs.build.outputs.artifact }}\` |"
+            echo "| Staging deploy | **dry run** |"
+            echo "| Production deploy | **dry run** |"
+            echo
+            echo "No infrastructure was changed. See the \`REAL DEPLOYMENT GOES HERE\`"
+            echo "blocks in \`.github/workflows/cd.yml\`."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ status }} &bull; Smart Attendance System</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✓</text></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/modern-clean.css') }}" rel="stylesheet">
+</head>
+<body>
+    <main style="min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;">
+        <div style="max-width: 460px; text-align: center;">
+            <div style="font-size: 56px; font-weight: 700; color: var(--text-muted); line-height: 1;">
+                {{ status }}
+            </div>
+
+            <h1 style="font-size: 20px; margin: 16px 0 8px;">
+                {% if status == 401 %}Sign in required
+                {% elif status == 403 %}Not permitted
+                {% elif status == 404 %}Page not found
+                {% elif status == 413 %}Upload too large
+                {% elif status == 429 %}Slow down
+                {% else %}Something went wrong
+                {% endif %}
+            </h1>
+
+            <p style="color: var(--text-muted); font-size: 14px;">{{ message }}</p>
+
+            {% if reference %}
+                <p style="font-size: 12px; color: var(--text-muted); margin-top: 16px;">
+                    Reference <code>{{ reference }}</code> &mdash; quote this when reporting the problem;
+                    it appears in the server log next to the full details.
+                </p>
+            {% endif %}
+
+            <div style="margin-top: 28px; display: flex; gap: 12px; justify-content: center;">
+                <a class="btn btn-primary" href="{{ url_for('dashboard.index') }}">
+                    <i class="fas fa-home"></i> Dashboard
+                </a>
+                <button class="btn btn-secondary" onclick="history.back()">
+                    <i class="fas fa-arrow-left"></i> Go back
+                </button>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

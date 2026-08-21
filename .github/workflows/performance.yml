@@ -1,4 +1,17 @@
-name: Performance Testing
+name: Performance
+
+# The steps that establish whether the application can even be imported no longer
+# swallow their failures.  The previous version wrapped the import in
+# `try/except Exception: print(f'Could not profile: {e}')`, then `|| echo ... skipped`,
+# then `continue-on-error: true` -- three separate layers of suppression over
+# `from app import app`, which raised NameError for a missing `rate_limit` decorator.
+# The report said "Could not profile" and the job said success.
+#
+# It also measured `radon raw app.py`, a file that no longer exists: the application is
+# the `app/` package now.
+#
+# The PR-comment behaviour is unchanged: reporting still tolerates failure, because a
+# comment that cannot be posted is not a reason to block a merge.
 
 on:
   pull_request:
@@ -7,111 +20,157 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
 
 jobs:
   benchmark:
-    name: Performance Benchmark
+    name: Benchmark
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.10'
-      
-      - name: Install dependencies
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install OpenCV runtime libraries
         run: |
-          pip install -r requirements.txt
-          pip install radon
-        continue-on-error: true
-      
-      - name: Run benchmarks
-        id: benchmark
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      # Gating: a benchmark that cannot install the application measures nothing.
+      - name: Install
         run: |
-          echo "## Performance Report" > perf-report.md
-          echo "" >> perf-report.md
-          
-          echo "### Memory Usage" >> perf-report.md
-          echo "\`\`\`" >> perf-report.md
-          python -c "
-          import tracemalloc
-          tracemalloc.start()
-          try:
-              from app import app
-              with app.test_client() as client:
-                  client.get('/')
-                  current, peak = tracemalloc.get_traced_memory()
-                  print(f'Current memory: {current / 1024 / 1024:.2f} MB')
-                  print(f'Peak memory: {peak / 1024 / 1024:.2f} MB')
-          except Exception as e:
-              print(f'Could not profile: {e}')
-          tracemalloc.stop()
-          " >> perf-report.md 2>&1 || echo "Memory profiling skipped" >> perf-report.md
-          echo "\`\`\`" >> perf-report.md
-          echo "" >> perf-report.md
-          
-          echo "### Startup Time" >> perf-report.md
-          echo "\`\`\`" >> perf-report.md
-          python -c "
+          pip install -e ".[dev]"
+          pip install "radon==6.0.1"
+
+      # Gating, and deliberately separate from the measurement below so that "the app
+      # does not import" is reported as a failed step rather than as a line of prose
+      # inside a PR comment.
+      - name: Application imports
+        env:
+          FLASK_ENV: testing
+        run: python -c "from app import create_app; create_app('testing')"
+
+      - name: Measure
+        id: measure
+        env:
+          FLASK_ENV: testing
+        run: |
+          set -euo pipefail
+          python - <<'PY' > perf-body.md
           import time
-          start = time.time()
-          try:
-              from app import app
-              elapsed = time.time() - start
-              print(f'App import time: {elapsed:.3f}s')
-          except Exception as e:
-              print(f'Could not measure: {e}')
-          " >> perf-report.md 2>&1 || echo "Startup timing skipped" >> perf-report.md
-          echo "\`\`\`" >> perf-report.md
-          echo "" >> perf-report.md
-          
-          echo "### Code Metrics" >> perf-report.md
-          echo "\`\`\`" >> perf-report.md
-          radon raw app.py -s 2>&1 | head -20 >> perf-report.md || echo "Metrics skipped" >> perf-report.md
-          echo "\`\`\`" >> perf-report.md
-          
+          import tracemalloc
+
+          tracemalloc.start()
+          t0 = time.perf_counter()
+          from app import create_app
+
+          import_s = time.perf_counter() - t0
+
+          t0 = time.perf_counter()
+          app = create_app("testing")
+          factory_s = time.perf_counter() - t0
+
+          rows = []
+          with app.app_context():
+              from app.extensions import db
+
+              db.create_all()
+          with app.test_client() as client:
+              for path in ("/healthz", "/login"):
+                  # One warm request first, so the number is not dominated by
+                  # first-request template compilation.
+                  client.get(path)
+                  t0 = time.perf_counter()
+                  for _ in range(20):
+                      response = client.get(path)
+                  ms = (time.perf_counter() - t0) / 20 * 1000
+                  rows.append((path, response.status_code, ms))
+
+          current, peak = tracemalloc.get_traced_memory()
+          tracemalloc.stop()
+
+          print("### Startup")
+          print()
+          print("| Measurement | Value |")
+          print("| --- | --- |")
+          print(f"| `import app` | {import_s * 1000:.0f} ms |")
+          print(f"| `create_app()` | {factory_s * 1000:.0f} ms |")
+          print(f"| Python heap after boot | {current / 1024 / 1024:.1f} MiB |")
+          print(f"| Peak during boot | {peak / 1024 / 1024:.1f} MiB |")
+          print()
+          print("### Request latency (test client, mean of 20)")
+          print()
+          print("| Route | Status | Mean |")
+          print("| --- | --- | --- |")
+          for path, status, ms in rows:
+              print(f"| `{path}` | {status} | {ms:.1f} ms |")
+          PY
+
+          {
+            echo "## Performance Report"
+            echo
+            cat perf-body.md
+            echo
+            echo "### Code metrics (\`app/\`)"
+            echo
+            echo '```'
+            radon raw app/ -s | tail -12
+            echo '```'
+            echo
+            echo "### Cyclomatic complexity, C and worse"
+            echo
+            echo '```'
+            radon cc app/ -n C -s || echo "no block ranks below B"
+            echo '```'
+          } > perf-report.md
+
           cat perf-report.md
-        continue-on-error: true
-      
+          cat perf-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Reporting, not a gate. Failing to comment must not fail the build, and this is
+      # the only step in the file where `continue-on-error` is still defensible.
       - name: Post performance report
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        continue-on-error: true
         with:
           script: |
             const fs = require('fs');
-            let report = 'Performance testing completed.';
-            
-            try {
-              report = fs.readFileSync('perf-report.md', 'utf8');
-            } catch (e) {
-              console.log('No report file');
-            }
-            
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number
+            const marker = '## Performance Report';
+            const report = fs.readFileSync('perf-report.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
             });
-            
-            const botComment = comments.find(c => 
-              c.user.type === 'Bot' && c.body.includes('Performance Report')
+            const existing = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes(marker)
             );
-            
-            if (botComment) {
+
+            if (existing) {
               await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: botComment.id,
-                body: report
+                owner, repo, comment_id: existing.id, body: report,
               });
             } else {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                body: report
+                owner, repo, issue_number, body: report,
               });
             }
-        continue-on-error: true

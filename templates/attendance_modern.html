@@ -9,10 +9,10 @@
         <p class="page-subtitle">View and manage attendance history</p>
     </div>
     <div class="header-actions">
-        <a href="{{ url_for('export_attendance') }}?format=csv" class="btn btn-secondary">
+        <a href="{{ url_for('attendance.export') }}?format=csv" class="btn btn-secondary">
             <i class="fas fa-download"></i> Export CSV
         </a>
-        <a href="{{ url_for('mark_attendance') }}" class="btn btn-primary">
+        <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-primary">
             <i class="fas fa-plus"></i> Mark Attendance
         </a>
     </div>

@@ -1,57 +1,174 @@
-name: Docker Build
+name: Docker
+
+# The old version of this workflow ended with `continue-on-error: true` on the build
+# step, so the image had never been *required* to build.  It could not have: the
+# Dockerfile installed `libgl1-mesa-glx`, a package that does not exist on the Debian
+# bookworm base that `python:*-slim` now resolves to.  A red build reported green.
+#
+# Now: the build gates, the image is scanned before it is published, and the container
+# has to actually serve a request before the tag moves.
 
 on:
   push:
     branches: [master, main]
-    tags:
-      - 'v*'
+    tags: ['v*']
   pull_request:
     branches: [master, main]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  # Local-only tag used for scanning and the smoke test, before anything is pushed.
+  LOCAL_IMAGE: attendance-system:ci
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
-    name: Build Docker Image
+    name: Build, scan and smoke test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Trivy uploads SARIF to the Security tab.
+      security-events: write
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Log in to Container Registry
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # Built and loaded into the local daemon first.  Scanning and smoke testing an
+      # image that was already pushed is the wrong order: a vulnerable or non-booting
+      # image would be public before anyone looked at it.
+      - name: Build image (load, do not push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          tags: ${{ env.LOCAL_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Gating on HIGH and CRITICAL in the OS and library layers. `exit-code: 1` is the
+      # whole point of the step; unfixed advisories get `--skip-` entries here with a
+      # comment naming the advisory and the reason, so a suppression shows up in a diff.
+      - name: Trivy scan (gating on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          format: table
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          exit-code: '1'
+
+      - name: Trivy scan (SARIF report for the Security tab)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          # Reporting only -- the gate above already failed the job if it needed to.
+          exit-code: '0'
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true  # reporting: a Security-tab upload failure is not a gate
+
+      # The container must serve /healthz under gunicorn, as the image's own HEALTHCHECK
+      # does.  The old CMD was `python app.py`, i.e. the Flask development server with
+      # debug=True -- this step would have caught that it was never exercised.
+      - name: Run the container and assert /healthz is healthy
+        run: |
+          set -euo pipefail
+
+          docker run -d --name attendance-ci \
+            -p 5000:5000 \
+            -e SECRET_KEY=ci-only-not-a-real-secret \
+            -e FLASK_ENV=production \
+            "${LOCAL_IMAGE}"
+
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:5000/healthz > healthz.json; then
+              break
+            fi
+            if [ -z "$(docker ps -q -f name=attendance-ci)" ]; then
+              echo "::error::container exited before serving a request"
+              docker logs attendance-ci
+              exit 1
+            fi
+            sleep 2
+          done
+
+          cat healthz.json
+          # "database": "ok" means the probe executed SELECT 1, not just that Flask is up.
+          grep -q '"database": *"ok"' healthz.json
+
+          # Unauthenticated dashboard access must redirect to the login page.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/)
+          test "$code" = "302" || { echo "::error::expected 302 from /, got $code"; exit 1; }
+
+          # And the image's declared HEALTHCHECK has to agree.
+          for attempt in $(seq 1 20); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' attendance-ci)
+            [ "$state" = "healthy" ] && break
+            [ "$state" = "unhealthy" ] && { docker logs attendance-ci; exit 1; }
+            sleep 3
+          done
+          test "$state" = "healthy" || { echo "::error::HEALTHCHECK never went healthy"; exit 1; }
+
+      - name: Container logs
+        if: always()
+        run: docker logs attendance-ci || true
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f attendance-ci || true
+
+      # --- publish -------------------------------------------------------------------
+      # Only reached when the build, the scan and the smoke test all passed.
+      - name: Log in to the container registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Extract metadata
+        if: github.event_name != 'pull_request'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
             type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
-      
-      - name: Build image
-        uses: docker/build-push-action@v5
+
+      # Re-runs against the layer cache populated above, so this is a cache hit and a
+      # push rather than a second build of the same content.
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-        continue-on-error: true

@@ -120,7 +120,7 @@
                             <button type="submit" class="btn btn-gradient-primary flex-grow-1">
                                 <i class="fas fa-search"></i>
                             </button>
-                            <a href="{{ url_for('leave_management') }}" class="btn btn-glass">
+                            <a href="{{ url_for('leave.index') }}" class="btn btn-glass">
                                 <i class="fas fa-times"></i>
                             </a>
                         </div>
@@ -281,7 +281,7 @@
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form action="{{ url_for('apply_leave') }}" method="POST">
+            <form action="{{ url_for('leave.apply') }}" method="POST">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Student <span class="text-danger">*</span></label>
@@ -340,7 +340,7 @@
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-            <form id="reviewLeaveForm" action="{{ url_for('review_leave') }}" method="POST">
+            <form id="reviewLeaveForm" action="{{ url_for('leave.review') }}" method="POST">
                 <div class="modal-body">
                     <input type="hidden" name="leave_id" id="reviewLeaveId">
                     <input type="hidden" name="status" id="reviewStatus">

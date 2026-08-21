@@ -1,242 +1,133 @@
-# Smart Attendance System - Fixes Applied
+# Fixes Applied
 
-## Date: October 10, 2025
+The previous version of this file (dated October 10, 2025) recorded a numpy
+array-truth-value fix in `face_recognition/face_encoder.py` and a fixed-layout CSS pass.
+Both refer to files the backend rewrite deleted. This file now records the correctness
+fixes that rewrite carried, with the before/after that motivated each.
 
-### 🔧 Issue 1: Face Recognition Array Comparison Error
-
-**Problem:** 
-```
-Failed to start face recognition: Face recognition error: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
-```
-
-**Root Cause:**
-Python's boolean evaluation of numpy arrays in compound `if` statements (e.g., `if not array or condition`) causes ambiguity.
-
-**Solution Applied:**
-Split compound boolean checks into separate statements in three files:
-
-1. **face_recognition/face_encoder.py**
-   - `compare_faces()` method - Lines 95-98
-   - `face_distance()` method - Lines 130-133
-
-2. **face_recognition/face_detector.py**
-   - `_recognize_face()` method - Lines 199-202
-
-**Changes:**
-```python
-# Before (Problematic):
-if not known_encodings or face_encoding is None:
-    return []
-
-# After (Fixed):
-if not known_encodings:
-    return []
-if face_encoding is None:
-    return []
-```
+Dated: 2026-08-21. Branch: `refactor/backend-and-pipeline`.
 
 ---
 
-### 🎨 Issue 2: Scrollable Pages - Fixed Layout Required
+## 1. Three crashes that stopped the app from starting
 
-**Problem:**
-Pages were scrollable, user wanted fixed, non-scrollable layouts.
+`app.py` could not be imported.
 
-**Solution Applied:**
+| Bug | Before | After |
+|---|---|---|
+| Undefined decorator | `@rate_limit(...)` on six routes; `rate_limit` defined nowhere → `NameError` at import | `@limiter.limit(...)` from a properly initialised Flask-Limiter |
+| Wrong CSRF call | `csrf.generate_csrf()` — not a method on `CSRFProtect` → `AttributeError` in every template | module-level `from flask_wtf.csrf import generate_csrf` |
+| Missing column | `AttendanceRecord(marked_by=...)` against a column that did not exist | `marked_by` added to the model (migration `0003`) |
 
-#### 1. Created New CSS File: `static/css/fixed-layout.css`
+Ruff's `F821` (undefined name) now gates CI, so a missing decorator fails the build instead
+of shipping.
 
-**Key Features:**
-- **No body scrolling**: `html, body { overflow: hidden }`
-- **Fixed navigation bar**: 60px height
-- **Flexible main content**: Uses `calc(100vh - 60px)` for perfect fit
-- **Scrollable card bodies**: Individual sections scroll within fixed containers
-- **Fixed video containers**: Proper aspect ratio maintenance
-- **Responsive grid layouts**: Auto-adjusting for different screen sizes
-- **Custom scrollbars**: Styled for better UX
-- **Fixed flash messages**: Positioned absolutely to avoid layout shifts
+## 2. Recognition that could not recognise
 
-**Layout Structure:**
-```
-┌─────────────────────────────────┐
-│   Navigation Bar (60px fixed)   │
-├─────────────────────────────────┤
-│                                 │
-│   Main Content Area             │
-│   (calc(100vh - 60px))         │
-│   - Scrollable internally       │
-│   - Fixed overall height        │
-│                                 │
-└─────────────────────────────────┘
-```
+**Before:** a "face encoding" was a 256-bin grayscale intensity histogram (`cv2.calcHist`
+over the crop). It discarded all spatial structure, so two different people under similar
+lighting correlated highly. Matching accepted correlation `> 0.4`; auto-marking accepted
+`> 0.3` — *below* the recognition threshold, so it wrote records it did not consider matches.
 
-#### 2. Updated `templates/base.html`
+**After:** `cv2.face.LBPHFaceRecognizer` (8×8 spatial grid) with three guards — a maximum
+distance, a runner-up margin, and N-consecutive-frame confirmation — plus a per-student
+cooldown. Auto-marking shares the recognition threshold; there is no looser second cutoff.
+A regression test scores two different enrolled people and asserts they no longer collide.
+Details in [README_FACE_RECOGNITION.md](README_FACE_RECOGNITION.md).
 
-**Changes:**
-- Added `fixed-layout.css` to CSS includes
-- Changed main content structure:
-  ```html
-  <!-- Before -->
-  <main class="container mt-4 mb-4">
-  
-  <!-- After -->
-  <main class="main-content">
-      <div class="container-fluid h-100">
-  ```
+## 3. Duplicate attendance under concurrency
 
-#### 3. Page-Specific Layouts
+**Before:** every marking path did `SELECT` then `INSERT`. Two concurrent requests — or the
+recognition loop firing twice — both saw no row and both inserted one.
 
-**Dashboard (`index.html`):**
-- Grid layout with fixed height cards
-- Stats cards: 150px fixed height
-- Chart containers: 300px fixed height
+**After:** `UniqueConstraint("student_id", "date")` plus an index on `(date, status)`.
+`attendance_service.mark()` inserts and catches `IntegrityError`, rolling back and returning
+the existing row, so marking is idempotent. Migration `0002` de-duplicates existing rows
+(keeping the earliest) before `0003` adds the constraint, because it cannot apply over
+duplicates.
 
-**Students Page (`students.html`):**
-- Filters section: Fixed at top
-- Student grid: Scrollable below
-- Total height: `calc(100vh - 100px)`
+## 4. Off-by-one-day records
 
-**Attendance Page (`attendance.html`):**
-- Two-column layout: 2fr (main) + 1fr (sidebar)
-- Both columns independently scrollable
-- Fixed overall height
+**Before:** model defaults used `datetime.utcnow()` while routes used local `date.today()`,
+so an evening mark could land on the wrong day, and `utcnow()` is deprecated in 3.12.
 
-**Mark Attendance (`mark_attendance.html`):**
-- Two-column layout: 1fr + 1fr
-- Camera section: Fixed video container
-- Detected faces: Scrollable list
-- Height: `calc(100vh - 100px)`
+**After:** one `app/utils/time.py`. Timestamps stored as timezone-aware UTC; "today" and all
+rendering resolved through a configurable `APP_TIMEZONE`. Ruff's `DTZ` rules ban naive
+datetimes.
 
-**Reports Page (`reports.html`):**
-- Filters: Fixed at top
-- Content: Scrollable below
-- Charts: Fixed 300px height
+## 5. Analytics N+1
 
-**Registration Page (`register_student.html`):**
-- Form container: Scrollable
-- Max height: `calc(100vh - 100px)`
+**Before:** `/api/analytics/top_students` issued 1 + N queries (501 for 500 students); other
+endpoints looped per-day or per-department.
 
-#### 4. Responsive Design
+**After:** aggregate SQL — `GROUP BY` with `func.sum(case(...))`. `top_students` and
+`at_risk` are O(1) queries; `trend` is one query with absent dates filled in Python. An
+integration test asserts the query count with a counter.
 
-**Mobile Adjustments:**
-```css
-@media (max-width: 768px) {
-    - Single column layouts
-    - Reduced padding
-    - Adjusted heights
-}
-```
+## 6. Internal errors leaked to clients
 
-#### 5. Special Features
+**Before:** ~40 copies of `except Exception as e: return jsonify({'error': str(e)}), 500`
+returned stack-trace text to callers, and a blanket `@app.errorhandler(400)` hijacked every
+400 to sniff for CSRF.
 
-**Custom Scrollbars:**
-- Width: 8px
-- Gradient thumb color
-- Smooth hover effects
+**After:** `app/errors.py` — content-negotiated 400/401/403/404/413/429/500 handlers that log
+the traceback server-side and return a generic message with a correlation id. A real
+`CSRFError` handler replaces the 400 hijack.
 
-**Fixed Elements:**
-- Flash messages: Top-right corner
-- Pagination: Sticky at bottom
-- Modals: Max 90vh height
+## 7. No authentication at all
 
-**Overflow Control:**
-- Horizontal: Hidden everywhere
-- Vertical: Auto in content areas
-- Body: Always hidden
+**Before:** anonymous visitors could delete students, rewrite attendance, and export the full
+roster. The state-changing recognition endpoints were `@csrf_exempt` POSTs.
 
----
+**After:** a `User` model (hashed passwords, `admin`/`teacher` roles), Flask-Login,
+`@login_required` on every mutating route and both exports, `@roles_required("admin")` on
+destructive routes and user management. CSRF is enforced on the recognition endpoints (the JS
+sends `X-CSRFToken`). **No default credentials** — `flask create-admin` bootstraps the first
+account and a fresh install has no usable login until it is run. `ProductionConfig.validate()`
+refuses to boot without `SECRET_KEY`; the old `or "production-secret-key"` fallback is gone.
 
-### ✅ Testing Results
+## 8. Uploads accepted anything
 
-**Face Recognition:**
-- ✅ Array comparison error fixed
-- ✅ Face encoding working
-- ✅ Face detection working
-- ✅ Face recognition working
+**Before:** `save_uploaded_file` wrote any bytes to a `.jpg`; the base64 capture path decoded
+arbitrary bytes to disk.
 
-**UI Layout:**
-- ✅ No body scrolling
-- ✅ Fixed navigation
-- ✅ Proper content sizing
-- ✅ Internal scrolling working
-- ✅ Responsive on mobile
-- ✅ All pages tested
+**After:** uploads are decoded with Pillow to confirm they are images, capped by dimension and
+`MAX_CONTENT_LENGTH` (16 MB), and restricted by extension.
+
+## 9. The camera fought itself
+
+**Before:** `SimpleCamera` and `FaceDetector` each opened camera index 0 independently, and a
+fallback tried indices `[1, 2, 0]`, so it could end up on a different camera than requested.
+Module-level `detection_active` / `face_recognition_active` globals reported one worker's
+state to another under `workers > 1`.
+
+**After:** one shared, reference-counted `CameraStream` with a condition variable (the MJPEG
+generator waits for a new frame and terminates on client disconnect). The pipeline is a
+per-process singleton; `gunicorn.conf.py` pins one worker and documents why.
+
+## 10. A pipeline that could not fail
+
+**Before:** every gate in `ci.yml` carried `continue-on-error: true` and/or `|| true`,
+including the build job's own import smoke test. Green over a dead app. `docker.yml` was
+`continue-on-error: true` and hid a `libgl1-mesa-glx` package that does not exist on
+bookworm. `code-review.yml` ran on `pull_request_target` with an untrusted checkout and
+interpolated PR filenames into a shell — command injection in a privileged context. `cd.yml`
+reported successful production deploys that were `echo` statements.
+
+**After:** every quality gate can fail. `ci.yml` gates lint, format, types, tests on 3.11 +
+3.12 with a coverage floor, the same suite against PostgreSQL, migration drift, bandit,
+pip-audit, and a real gunicorn boot asserting `/healthz`. `docker.yml` builds, Trivy-scans,
+and health-checks the container before any push. `code-review.yml` moved to `pull_request`
+with env-passed, `xargs -0`-fed filenames. `cd.yml`'s deploy steps are explicit dry runs. All
+actions are pinned to commit SHAs. See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md#cicd).
 
 ---
 
-### 📝 Files Modified
+## Verified
 
-1. `face_recognition/face_encoder.py` - Fixed array comparisons
-2. `face_recognition/face_detector.py` - Fixed array comparisons
-3. `static/css/fixed-layout.css` - NEW FILE - Complete fixed layout system
-4. `templates/base.html` - Updated structure and CSS includes
+`ruff check`, `ruff format --check`, `mypy app/`, 272 tests at 79% coverage (75% floor),
+bandit and pip-audit clean, migrations apply to a fresh DB with no drift, `/healthz` returns
+200, unauthenticated mutating requests are refused.
 
----
-
-### 🚀 How to Use
-
-1. **Start the application:**
-   ```bash
-   python app.py
-   ```
-
-2. **Access the system:**
-   ```
-   http://127.0.0.1:5000
-   ```
-
-3. **Test face recognition:**
-   - Go to "Mark Attendance"
-   - Click "Start Camera"
-   - Click "Start AI"
-   - System will detect and recognize faces
-
-4. **Verify fixed layout:**
-   - Navigate to any page
-   - Body should not scroll
-   - Content areas scroll internally
-   - Layout stays fixed at 100vh
-
----
-
-### 🎯 Benefits
-
-**Face Recognition Fix:**
-- ✅ No more array comparison errors
-- ✅ Reliable face detection
-- ✅ Stable recognition system
-
-**Fixed Layout:**
-- ✅ Professional appearance
-- ✅ No unexpected scrolling
-- ✅ Better UX
-- ✅ Consistent across pages
-- ✅ Mobile-friendly
-- ✅ Faster perceived performance
-
----
-
-### 📊 System Status
-
-- **Camera**: ✅ Working
-- **Face Recognition**: ✅ Working (Fixed)
-- **UI Layout**: ✅ Fixed (Non-scrollable)
-- **Database**: ✅ Working
-- **API Endpoints**: ✅ Working
-- **All Features**: ✅ Functional
-
----
-
-### 🔮 Future Enhancements
-
-1. Add keyboard shortcuts for camera control
-2. Implement zoom controls for video feed
-3. Add fullscreen mode for camera
-4. Implement dark/light theme toggle
-5. Add customizable layout preferences
-
----
-
-**Status**: ✅ All Issues Resolved
-**System**: 🟢 Fully Operational
-**Ready for**: Production Use
+**Not verified in the dev environment:** Docker (not installed here), the gunicorn boot step
+(gunicorn does not run on Windows), and the PostgreSQL CI leg. These run in CI on Linux.

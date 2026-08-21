@@ -13,7 +13,7 @@
                 <a href="{{ url_for('bulk_mark_absent_by_class') }}" class="btn btn-warning">
                     <i class="fas fa-users-slash me-1"></i>Bulk Mark by Class
                 </a>
-                <a href="{{ url_for('attendance') }}" class="btn btn-secondary">
+                <a href="{{ url_for('attendance.list_attendance') }}" class="btn btn-secondary">
                     <i class="fas fa-arrow-left me-1"></i>Back to Attendance
                 </a>
             </div>
@@ -198,7 +198,7 @@
                             <span id="selectedCount">0</span> students selected
                         </div>
                         <div>
-                            <a href="{{ url_for('attendance') }}" class="btn btn-secondary me-2">
+                            <a href="{{ url_for('attendance.list_attendance') }}" class="btn btn-secondary me-2">
                                 <i class="fas fa-times me-1"></i>Cancel
                             </a>
                             <button type="submit" class="btn btn-warning">

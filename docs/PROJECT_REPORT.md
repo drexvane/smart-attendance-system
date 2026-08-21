@@ -1,334 +1,237 @@
-# Smart Attendance System - Project Report
+# Smart Attendance System — Project Report
 
-## 1. Problem Statement
+> This report was rewritten to match the system as it is actually built. The earlier version
+> described a dlib / `face_recognition` pipeline producing 128-dimensional embeddings and
+> claimed face recognition "eliminates" proxy attendance. Neither was true: the code never
+> used dlib, and no classical recogniser eliminates proxy attendance. The claims below are
+> written to match the implementation and its real limits.
 
-Traditional attendance systems in educational institutions face several challenges:
-- **Time-consuming manual processes**: Teachers spend valuable class time taking attendance
-- **Proxy attendance**: Students can mark attendance for absent classmates
-- **Human errors**: Manual entry leads to mistakes and inconsistencies
-- **Paper-based records**: Difficult to maintain, analyze, and retrieve
-- **Limited analytics**: No insights into attendance patterns and trends
+## 1. Problem statement
+
+Manual attendance in classrooms is slow, error-prone, hard to analyse, and easy to falsify
+by proxy. The goal is a web application that lets a teacher take attendance from a camera
+feed, keeps auditable records, and makes casual proxy marking harder — without overstating
+what automated recognition can guarantee.
 
 ## 2. Objectives
 
-### Primary Objectives
-- Develop an automated attendance system using face recognition technology
-- Eliminate proxy attendance through biometric verification
-- Reduce time spent on attendance marking
-- Provide real-time attendance tracking and reporting
+**Primary**
+- Assist attendance capture from a live camera, with a manual path always available.
+- Reduce *casual* proxy marking through recognition plus a multi-frame confirmation stage.
+- Keep correct, idempotent, queryable records with real access control.
 
-### Secondary Objectives
-- Create a user-friendly web interface for teachers and administrators
-- Generate comprehensive attendance reports and analytics
-- Export attendance data in multiple formats (CSV, Excel)
-- Implement a scalable system architecture for future enhancements
+**Secondary**
+- A web interface for teachers (day-to-day) and admins (destructive actions, user management).
+- Analytics and CSV/Excel export.
+- A codebase and CI/CD pipeline that can be maintained and trusted (gates that actually fail).
+
+**Explicit non-goal:** liveness / anti-spoofing. See §7.
 
 ## 3. Methodology
 
-### 3.1 System Architecture
-The system follows a modular architecture with the following components:
+### 3.1 Architecture
+
+An application-factory Flask backend, layered blueprint → service → model, with the
+recognition pipeline as a per-process singleton beside the services.
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │    Backend      │    │    Database     │
-│   (HTML/CSS/JS) │◄──►│   (Flask/Python)│◄──►│   (SQLite)      │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         │              ┌─────────────────┐              │
-         └──────────────►│ Face Recognition│──────────────┘
-                        │ (OpenCV + dlib) │
-                        └─────────────────┘
+Browser ─► nginx (TLS) ─► gunicorn (1 worker) ─► create_app()
+                                                   ├─ blueprints/  (HTTP)
+                                                   ├─ services/    (rules, txns, SQL)
+                                                   ├─ models/      (schema)
+                                                   └─ recognition/ (camera→detect→recognise→confirm)
+                                                        │                 │
+                                                   SQLite/Postgres     one webcam
 ```
 
-### 3.2 Face Recognition Pipeline
+The single worker is a deliberate constraint, not a limitation to fix: a webcam is one
+physical device and cannot be shared across processes.
 
-1. **Face Detection**: Using OpenCV's Haar cascades or HOG (Histogram of Oriented Gradients)
-2. **Face Encoding**: Converting detected faces to 128-dimensional vectors using dlib
-3. **Face Comparison**: Matching live faces with stored encodings using Euclidean distance
-4. **Attendance Marking**: Automatically updating database records
+### 3.2 Recognition pipeline
 
-### 3.3 Development Approach
+1. **Detection** — res10 SSD via `cv2.dnn.readNetFromCaffe` (bundled Caffe model), with a
+   Haar cascade as an automatic fallback if the model files are absent.
+2. **Recognition** — `cv2.face.LBPHFaceRecognizer`. LBPH builds a histogram per cell of an
+   8×8 grid, so it encodes facial structure (unlike the whole-image intensity histogram this
+   replaced). It returns a distance; lower is a better match.
+3. **Confirmation (anti-proxy)** — three guards before any record is written:
+   a maximum distance (else *Unknown*), a runner-up margin (else *ambiguous → rejected*), and
+   recognition in N consecutive frames, followed by a per-student cooldown.
 
-- **Agile methodology** with iterative development cycles
-- **Test-driven development** for critical components
-- **Modular design** for easy maintenance and scalability
-- **Security-first approach** for data protection
+### 3.3 Development approach
 
-## 4. Technology Stack
+Layered separation (no business logic in blueprints, no `request`/`session` in services);
+UTC storage with a configurable display timezone; migrations over `create_all()`; and a CI
+pipeline where lint, types, tests, security, and a live boot are all gating.
 
-### Backend Technologies
-- **Python 3.8+**: Core programming language
-- **Flask**: Web framework for API development
-- **SQLAlchemy**: ORM for database operations
-- **SQLite**: Lightweight database for development
+## 4. Technology stack
 
-### Computer Vision Libraries
-- **OpenCV**: Image processing and computer vision
-- **face_recognition**: High-level face recognition library
-- **dlib**: Machine learning algorithms for face detection
-- **NumPy**: Numerical computing for array operations
+| Concern | Choice |
+|---|---|
+| Language | Python 3.12 (3.11 floor) |
+| Web | Flask (app factory), Flask-Login, Flask-Migrate, Flask-WTF (CSRF), Flask-Limiter |
+| ORM / DB | SQLAlchemy 2; SQLite default, PostgreSQL supported (psycopg 3) |
+| Migrations | Alembic (`render_as_batch=True`) |
+| Vision | `opencv-contrib-python-headless` (DNN detector + LBPH), NumPy, Pillow |
+| Server | gunicorn (`gthread`, one worker); nginx + TLS in front |
+| Rate limiting | Flask-Limiter, Redis storage in production |
+| Frontend | Jinja2 templates, Bootstrap, Chart.js |
+| Quality | ruff, mypy, pytest + coverage, bandit, pip-audit, pre-commit |
+| CI/CD | GitHub Actions (SHA-pinned), Trivy image scan, Dependabot |
 
-### Frontend Technologies
-- **HTML5**: Markup language for web pages
-- **CSS3 + Bootstrap 5**: Styling and responsive design
-- **JavaScript + jQuery**: Client-side interactivity
-- **Chart.js**: Data visualization for reports
-
-### Additional Tools
-- **Pillow**: Image processing library
-- **Pandas**: Data manipulation for exports
-- **OpenPyXL**: Excel file generation
+**No dlib, no CMake, no compiler** for the vision stack — it is a wheel.
 
 ## 5. Implementation
 
-### 5.1 Database Design
+### 5.1 Database design (current schema)
 
-#### Students Table
 ```sql
+CREATE TABLE users (              -- operator accounts; the system had none before
+    id INTEGER PRIMARY KEY,
+    username     VARCHAR(64)  UNIQUE NOT NULL,
+    email        VARCHAR(120) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,      -- werkzeug hash, never plaintext
+    role         VARCHAR(20)  NOT NULL DEFAULT 'teacher',   -- admin | teacher
+    is_active    BOOLEAN      NOT NULL DEFAULT 1,
+    last_login_at DATETIME, created_at DATETIME, updated_at DATETIME
+);
+
 CREATE TABLE students (
     id INTEGER PRIMARY KEY,
     student_id VARCHAR(20) UNIQUE NOT NULL,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(120) UNIQUE NOT NULL,
-    phone VARCHAR(15),
-    department VARCHAR(50),
-    year VARCHAR(10),
-    section VARCHAR(5),
-    face_encoding TEXT,
-    image_path VARCHAR(200),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    name VARCHAR(100) NOT NULL, email VARCHAR(120) UNIQUE NOT NULL,
+    phone VARCHAR(15), department VARCHAR(50), year VARCHAR(10), section VARCHAR(5),
+    image_path VARCHAR(255),
+    face_model_label   INTEGER UNIQUE,        -- LBPH label; model lives in face_data/
+    face_samples_count INTEGER NOT NULL DEFAULT 0,
+    face_enrolled_at   DATETIME,
+    is_active BOOLEAN NOT NULL DEFAULT 1, created_at DATETIME, updated_at DATETIME
+    -- the old face_encoding TEXT column (a grayscale histogram) is dropped
 );
-```
 
-#### Attendance Records Table
-```sql
 CREATE TABLE attendance_records (
     id INTEGER PRIMARY KEY,
-    student_id INTEGER REFERENCES students(id),
-    date DATE NOT NULL,
-    time_in DATETIME NOT NULL,
-    time_out DATETIME,
-    status VARCHAR(20) DEFAULT 'Present',
-    confidence_score FLOAT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    date DATE NOT NULL, time_in DATETIME NOT NULL, time_out DATETIME,
+    status VARCHAR(20) NOT NULL DEFAULT 'Present',
+    confidence_score FLOAT, marked_by VARCHAR(64) NOT NULL DEFAULT 'System',
+    notes VARCHAR(255), created_at DATETIME, updated_at DATETIME,
+    CONSTRAINT uq_attendance_student_date UNIQUE (student_id, date)  -- idempotency
 );
+
+CREATE TABLE leave_requests ( ... student_id FK ON DELETE CASCADE, leave_type,
+    start_date, end_date, reason, status, reviewed_by, reviewed_at, review_notes ... );
 ```
 
-### 5.2 Core Features Implementation
+The `UNIQUE(student_id, date)` constraint is what makes concurrent marking safe: the service
+inserts and catches the resulting `IntegrityError` instead of doing a racy read-then-write.
 
-#### Face Registration
+### 5.2 Recognition (representative, not the old dlib code)
+
 ```python
-def register_student_face(image_path):
-    # Load and preprocess image
-    image = face_recognition.load_image_file(image_path)
-    
-    # Detect face locations
-    face_locations = face_recognition.face_locations(image)
-    
-    if len(face_locations) != 1:
-        raise ValueError("Image must contain exactly one face")
-    
-    # Generate face encoding
-    face_encodings = face_recognition.face_encodings(image, face_locations)
-    
-    return face_encodings[0]
+# recognizer.predict(): distance per candidate, then two guards
+best_label, best_distance = ranked[0]
+runner_up = ranked[1][1] if len(ranked) > 1 else None
+if best_distance > self.max_distance:
+    return Match(None, best_distance, 0.0, rejection="distance_above_threshold")   # Unknown
+if runner_up is not None and (runner_up - best_distance) < self.min_margin:
+    return Match(None, ..., rejection="ambiguous_match")                            # refuse
+return Match(student_pk, best_distance, self._to_confidence(best_distance))
 ```
 
-#### Real-time Face Recognition
 ```python
-def recognize_faces(frame, known_encodings, known_names):
-    # Resize frame for faster processing
-    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-    
-    # Find faces in current frame
-    face_locations = face_recognition.face_locations(small_frame)
-    face_encodings = face_recognition.face_encodings(small_frame, face_locations)
-    
-    recognized_faces = []
-    
-    for face_encoding in face_encodings:
-        # Compare with known faces
-        matches = face_recognition.compare_faces(known_encodings, face_encoding)
-        distances = face_recognition.face_distance(known_encodings, face_encoding)
-        
-        best_match_index = np.argmin(distances)
-        
-        if matches[best_match_index] and distances[best_match_index] < 0.6:
-            name = known_names[best_match_index]
-            confidence = 1 - distances[best_match_index]
-            recognized_faces.append((name, confidence))
-    
-    return recognized_faces
+# pipeline: consecutive-frame confirmation before a candidate is publishable
+candidate.streak += 1
+if candidate.streak < self.confirm_frames:      # default 5
+    return False                                # not yet eligible
+# ... cooldown check, then publish to _pending for the service to mark
 ```
 
-### 5.3 Web Application Structure
+### 5.3 Package structure
 
 ```
-smart_attendance_system/
-├── app.py                 # Main Flask application
-├── config.py             # Configuration settings
-├── requirements.txt      # Python dependencies
-├── database/
-│   ├── models.py        # SQLAlchemy models
-│   └── attendance.db    # SQLite database
-├── face_recognition/
-│   ├── face_encoder.py  # Face encoding utilities
-│   └── face_detector.py # Real-time detection
-├── templates/           # HTML templates
-├── static/             # CSS, JS, images
-├── utils/              # Helper functions
-└── student_images/     # Stored face images
+app/ __init__.py config.py extensions.py errors.py cli.py
+     models/ blueprints/ services/ recognition/ utils/
+migrations/versions/ 0001_baseline 0002_dedupe_attendance 0003_auth_and_constraints
+wsgi.py run.py gunicorn.conf.py   tests/unit tests/integration
 ```
 
-## 6. Results and Output Screenshots
+See [STRUCTURE.md](STRUCTURE.md).
 
-### 6.1 System Dashboard
-- Real-time attendance statistics
-- Quick action buttons for common tasks
-- Recent attendance records display
-- Responsive design for mobile devices
+## 6. Results
 
-### 6.2 Student Registration
-- User-friendly form for student data entry
-- Image upload with preview functionality
-- Face detection validation
-- Comprehensive error handling
+Functional, verified in development:
 
-### 6.3 Face Recognition Interface
-- Live camera feed with face detection overlay
-- Real-time recognition results
-- Confidence score display
-- Attendance confirmation modal
+- Auth: anonymous access to mutating routes and exports is refused; roles enforced; first
+  account created by `flask create-admin` (no default credentials).
+- Marking is idempotent under repeats/concurrency (one row per student per day).
+- Analytics endpoints are O(1) queries (were 1 + N).
+- Recognition separates two different enrolled people that the old histogram matcher scored
+  as the same (regression test).
+- `/healthz` reports database reachability for load balancers and the container HEALTHCHECK.
+- Quality suite: `ruff`, `mypy`, **272 tests at ~79% coverage** (75% floor), bandit and
+  pip-audit clean; migrations apply with no drift.
 
-### 6.4 Attendance Reports
-- Comprehensive attendance analytics
-- Interactive charts and graphs
-- Department-wise statistics
-- Export functionality (CSV/Excel)
+## 7. Performance and accuracy — honestly
 
-## 7. Performance Analysis
+**No accuracy benchmark has been run in this environment, so no accuracy figure is claimed.**
+The earlier report's "95–98%" numbers were not measured. Recognition accuracy for LBPH
+depends heavily on enrolment quality, lighting, and camera; it should be measured on the
+deployment's own data (see the tuning table in
+[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md#configuration-reference)).
 
-### 7.1 Accuracy Metrics
-- **Face Detection Rate**: 95-98% under good lighting conditions
-- **Recognition Accuracy**: 92-96% with properly trained encodings
-- **False Positive Rate**: <2% with optimized threshold settings
-- **Processing Speed**: 15-20 FPS on standard hardware
+What can be stated:
+- LBPH with an 8×8 spatial grid is a large, structural improvement over an intensity
+  histogram, which could not distinguish two faces at all.
+- The confirmation stage means no single frame, and no ambiguous or below-threshold match,
+  can write a record — the dominant cause of casual false marks in the old design.
+- Throughput is bounded by one camera and one worker; threads handle web concurrency. This
+  is sized for a single institution with one entry point, not a campus of cameras.
 
-### 7.2 System Performance
-- **Database Response Time**: <100ms for typical queries
-- **Face Encoding Time**: 200-500ms per image
-- **Real-time Processing**: 30-50ms per frame
-- **Memory Usage**: 150-300MB during active recognition
+**Limitations, stated plainly:**
+- **No liveness detection.** A printed photo or a face on a phone screen can pass. This is
+  the top roadmap item and the reason a human should stay in the loop where attendance
+  carries consequences.
+- **LBPH is classical**, not a deep embedding; it is sensitive to pose and lighting.
+- **Biometric data is stored unencrypted** on disk (`face_data/`, `student_images/`). Consent,
+  retention, and deletion are operational responsibilities; the DPDP Act (India) and GDPR
+  (special category) apply.
 
-### 7.3 Scalability Considerations
-- **Concurrent Users**: Supports 10-50 simultaneous users
-- **Database Capacity**: Handles 1000+ student records efficiently
-- **Storage Requirements**: ~1MB per 100 student images
-- **Network Bandwidth**: Minimal requirements for local deployment
+## 8. Challenges and solutions
 
-## 8. Challenges and Solutions
+| Challenge | Solution |
+|---|---|
+| The app could not start (undefined `rate_limit`, wrong CSRF call, missing column) | Rebuilt on an app factory; ruff `F821` now gates undefined names |
+| A matcher that could not tell people apart | LBPH + distance + margin + consecutive-frame confirmation |
+| Duplicate rows from read-then-write races | `UNIQUE(student_id, date)` + `IntegrityError`-catching service |
+| Off-by-one-day records | UTC storage, configurable display timezone, one time helper |
+| Analytics 1 + N queries | Aggregate SQL (`GROUP BY`, `func.sum(case(...))`) |
+| Anonymous destructive access | Flask-Login, roles, CSRF, no default credentials |
+| A green CI over a dead app | Every gate made able to fail; live boot + health check |
+| Camera contention across workers | One shared capture thread; per-process singleton; one worker |
 
-### 8.1 Technical Challenges
+## 9. Future scope
 
-#### Challenge 1: Lighting Variations
-**Problem**: Face recognition accuracy drops in poor lighting conditions
-**Solution**: 
-- Image preprocessing with histogram equalization
-- Multiple face encodings per student
-- Adaptive threshold adjustment
-
-#### Challenge 2: Camera Quality
-**Problem**: Low-resolution cameras affect detection accuracy
-**Solution**:
-- Minimum resolution requirements (640x480)
-- Image enhancement algorithms
-- Multiple capture attempts
-
-#### Challenge 3: Real-time Processing
-**Problem**: High computational requirements for real-time recognition
-**Solution**:
-- Frame rate optimization (process every 3rd frame)
-- Multithreading for camera capture and processing
-- Efficient face encoding storage
-
-### 8.2 Implementation Challenges
-
-#### Challenge 1: Database Design
-**Problem**: Storing face encodings efficiently
-**Solution**: JSON serialization of NumPy arrays in TEXT fields
-
-#### Challenge 2: Web Interface Responsiveness
-**Problem**: Real-time updates without page refresh
-**Solution**: AJAX polling and WebSocket connections
-
-#### Challenge 3: Error Handling
-**Problem**: Graceful handling of camera and recognition failures
-**Solution**: Comprehensive exception handling and user feedback
-
-## 9. Future Scope
-
-### 9.1 Immediate Enhancements
-- **Mobile Application**: Native Android/iOS apps for teachers
-- **Cloud Deployment**: AWS/GCP hosting for remote access
-- **Email Notifications**: Automated alerts for parents/students
-- **Backup Systems**: Automated database backups and recovery
-
-### 9.2 Advanced Features
-- **Multi-camera Support**: Multiple entry points monitoring
-- **Emotion Recognition**: Detecting student engagement levels
-- **Mask Detection**: COVID-19 compliance monitoring
-- **Integration APIs**: Connection with existing school management systems
-
-### 9.3 Machine Learning Improvements
-- **Deep Learning Models**: CNN-based face recognition for better accuracy
-- **Anti-spoofing**: Protection against photo/video attacks
-- **Continuous Learning**: Model improvement with new data
-- **Edge Computing**: On-device processing for privacy
-
-### 9.4 Analytics and Insights
-- **Predictive Analytics**: Attendance pattern prediction
-- **Performance Correlation**: Linking attendance with academic performance
-- **Behavioral Analysis**: Student engagement and participation metrics
-- **Custom Reports**: Tailored analytics for different stakeholders
+- **Liveness / anti-spoofing** (blink or challenge–response, or a passive PAD model) — the
+  most important gap.
+- A **deep face embedding** (e.g. an ONNX ArcFace) behind the same recognizer interface.
+- **Splitting the camera into its own service** so the web tier can scale horizontally.
+- **Encryption at rest** for biometric samples and an **audit log** of who marked what.
+- Tightening the Content-Security-Policy (currently needs `'unsafe-inline'`).
 
 ## 10. Conclusion
 
-The Smart Attendance System successfully addresses the limitations of traditional attendance methods by leveraging face recognition technology. The system demonstrates:
-
-### Key Achievements
-- **Automation**: Reduced attendance marking time by 80%
-- **Accuracy**: Achieved 95%+ recognition accuracy in controlled environments
-- **Security**: Eliminated proxy attendance through biometric verification
-- **Usability**: Intuitive interface requiring minimal training
-
-### Technical Success
-- **Scalable Architecture**: Modular design supporting future enhancements
-- **Real-time Performance**: Sub-second response times for recognition
-- **Data Management**: Comprehensive reporting and analytics capabilities
-- **Cross-platform Compatibility**: Web-based solution accessible on any device
-
-### Educational Impact
-- **Time Savings**: Teachers can focus more on instruction
-- **Data Insights**: Better understanding of attendance patterns
-- **Administrative Efficiency**: Streamlined record-keeping processes
-- **Student Accountability**: Transparent and fair attendance tracking
-
-### Project Learning Outcomes
-This project provided valuable experience in:
-- Computer vision and machine learning applications
-- Full-stack web development with Python and Flask
-- Database design and optimization
-- User interface design and user experience
-- Project management and documentation
-
-The Smart Attendance System represents a significant step toward modernizing educational administration through technology, providing a foundation for future innovations in automated student monitoring and engagement systems.
+The system automates attendance capture from a camera, enforces access control, keeps
+correct idempotent records, and raises the bar against casual proxy marking through
+recognition plus multi-frame confirmation. It does not, and does not claim to, eliminate
+proxy attendance: without liveness detection a determined spoof with a photo can still
+succeed, which is why the manual path and human oversight remain first-class. The refactor's
+larger contribution is a codebase and pipeline whose correctness can be verified rather than
+asserted.
 
 ---
 
 **Project Team**: [Your Name]  
 **Institution**: [Your College/University]  
-**Course**: B.Tech Computer Science/IT  
-**Year**: 2nd Year  
-**Date**: [Current Date]
+**Course**: [Course]  
+**Date**: [Date]

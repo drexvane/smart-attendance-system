@@ -1,178 +1,192 @@
-name: Automated Code Review
+name: Code Review
+
+# Two things were wrong with the previous version of this file, and only one of them was
+# about code quality.
+#
+# 1. **Command injection into a privileged workflow.** It ran on `pull_request_target`
+#    -- which carries the repository's write token and its secrets -- checked out the
+#    *untrusted* head SHA of the pull request, and then interpolated
+#    `${{ steps.changed-files.outputs.all_changed_files }}` straight into a `run:` block.
+#    A fork can add a file whose name contains shell metacharacters, and it would have
+#    been evaluated by that privileged shell. The analysis job now runs on plain
+#    `pull_request` (read-only token, no secrets for forks), and the file list is passed
+#    through the environment and read by the tool, never spliced into a command.
+#
+# 2. It linted with flake8 at `--max-line-length=120`, which is not this project's
+#    configuration. Reports that disagree with the gate in ci.yml train people to ignore
+#    them. It uses ruff with the repo's own pyproject settings now.
+#
+# `tj-actions/changed-files` is gone too: `git diff` against the merge base needs no
+# third-party action, and that particular one was the subject of a supply-chain
+# compromise in which a tag was retargeted to a malicious commit.
+#
+# This workflow is a *reporter*, not a gate -- ci.yml holds the gates. Its steps are
+# allowed to fail without failing the build, which for a PR comment is the correct
+# tradeoff, and it is the reason none of them may hold write permissions.
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  code-quality:
-    name: Code Quality Analysis
+  review:
+    name: Lint report for changed files
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.10'
-      
+          python-version: '3.12'
+
       - name: Install analysis tools
-        run: pip install flake8 pylint radon lizard
-      
-      - name: Get changed Python files
-        id: changed-files
-        uses: tj-actions/changed-files@v44
-        with:
-          files: |
-            **/*.py
-      
-      - name: Run code analysis
-        if: steps.changed-files.outputs.any_changed == 'true'
-        id: analysis
+        run: pip install "ruff==0.16.4" "radon==6.0.1"
+
+      - name: Collect changed Python files
+        id: changed
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          echo "## Code Quality Report" > report.md
-          echo "" >> report.md
-          echo "### Changed Files" >> report.md
-          echo "\`\`\`" >> report.md
-          echo "${{ steps.changed-files.outputs.all_changed_files }}" >> report.md
-          echo "\`\`\`" >> report.md
-          echo "" >> report.md
-          
-          echo "### Flake8 (Style & Errors)" >> report.md
-          echo "\`\`\`" >> report.md
-          flake8 ${{ steps.changed-files.outputs.all_changed_files }} --max-line-length=120 --statistics 2>&1 >> report.md || true
-          echo "\`\`\`" >> report.md
-          echo "" >> report.md
-          
-          echo "### Cyclomatic Complexity" >> report.md
-          echo "\`\`\`" >> report.md
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            echo "File: $file" >> report.md
-            radon cc "$file" -a -s 2>&1 >> report.md || true
-          done
-          echo "\`\`\`" >> report.md
-          echo "" >> report.md
-          
-          echo "### Maintainability Index" >> report.md
-          echo "\`\`\`" >> report.md
-          radon mi ${{ steps.changed-files.outputs.all_changed_files }} -s 2>&1 >> report.md || true
-          echo "\`\`\`" >> report.md
-          
-          echo "" >> report.md
-          echo "---" >> report.md
-          echo "*Automated code review by GitHub Actions*" >> report.md
-        continue-on-error: true
-      
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          # NUL-delimited, so a filename containing a space or a newline cannot split.
+          git diff -z --name-only --diff-filter=ACMR \
+            "origin/${BASE_REF}...HEAD" -- '*.py' > changed.zero
+          count=$(tr -cd '\0' < changed.zero | wc -c)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count changed Python file(s)"
+          tr '\0' '\n' < changed.zero
+
+      - name: Analyse
+        if: steps.changed.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          {
+            echo "## Code Quality Report"
+            echo
+            echo "### Changed Python files"
+            echo
+            echo '```'
+            tr '\0' '\n' < changed.zero
+            echo '```'
+            echo
+            echo "### ruff (project configuration, the same rules ci.yml gates on)"
+            echo
+            echo '```'
+            # xargs -0 keeps the names as arguments rather than as shell text.
+            xargs -0 -r ruff check --no-cache < changed.zero 2>&1 || true
+            echo '```'
+            echo
+            echo "### Cyclomatic complexity and maintainability"
+            echo
+            echo '```'
+            xargs -0 -r radon cc -a -s < changed.zero 2>&1 || true
+            echo
+            xargs -0 -r radon mi -s < changed.zero 2>&1 || true
+            echo '```'
+            echo
+            echo "---"
+            echo "*Reporting only. The gates are in \`ci.yml\`.*"
+          } > report.md
+
+          cat report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Post review comment
-        if: steps.changed-files.outputs.any_changed == 'true'
-        uses: actions/github-script@v7
+        if: steps.changed.outputs.count != '0'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        continue-on-error: true
         with:
           script: |
             const fs = require('fs');
-            let report = 'No Python files changed.';
-            
-            try {
-              report = fs.readFileSync('report.md', 'utf8');
-            } catch (e) {
-              console.log('No report generated');
-            }
-            
+            const marker = '## Code Quality Report';
+            let report = fs.readFileSync('report.md', 'utf8');
             if (report.length > 60000) {
-              report = report.substring(0, 60000) + '\n\n... (truncated)';
+              report = report.slice(0, 60000) + '\n\n... (truncated)';
             }
-            
-            try {
-              const { data: comments } = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number
-              });
-              
-              const botComment = comments.find(c => 
-                c.user.type === 'Bot' && c.body.includes('Code Quality Report')
-              );
-              
-              if (botComment) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: botComment.id,
-                  body: report
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
-                  body: report
-                });
-              }
-            } catch (error) {
-              console.log(`Could not post comment: ${error.message}`);
-            }
-        continue-on-error: true
 
-  pr-checklist:
-    name: PR Checklist
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body: report,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body: report,
+              });
+            }
+
+  checklist:
+    name: PR checklist
     runs-on: ubuntu-latest
     if: github.event.action == 'opened'
+    permissions:
+      contents: read
+      pull-requests: write
+    # No checkout: this job only talks to the API, which is why it is safe for it to
+    # hold a write permission.
     steps:
-      - name: Add PR checklist
-        uses: actions/github-script@v7
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        continue-on-error: true
         with:
           script: |
             const pr = context.payload.pull_request;
-            
-            const checklist = `## PR Checklist
-            
-            Please review and check off the following:
-            
-            ### Code Quality
-            - [ ] Code follows project style guidelines
-            - [ ] Self-review completed
-            - [ ] No unnecessary console.log/print statements
-            - [ ] No hardcoded values or secrets
-            
-            ### Testing
-            - [ ] Tests added/updated for new functionality
-            - [ ] All existing tests pass
-            - [ ] Manual testing completed
-            
-            ### Documentation
-            - [ ] Code comments added for complex logic
-            - [ ] README updated (if applicable)
-            
-            ### Security
-            - [ ] No sensitive data exposed
-            - [ ] Input validation implemented
-            
-            ---
-            
-            **PR Stats:**
-            | Metric | Value |
-            |--------|-------|
-            | Files Changed | ${pr.changed_files} |
-            | Additions | +${pr.additions} |
-            | Deletions | -${pr.deletions} |
-            | Total Changes | ${pr.additions + pr.deletions} |
-            `;
-            
-            try {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pr.number,
-                body: checklist
-              });
-            } catch (error) {
-              console.log(`Could not post checklist: ${error.message}`);
-            }
-        continue-on-error: true
+            const body = [
+              '## PR Checklist',
+              '',
+              '### Code quality',
+              '- [ ] `ruff check .` and `ruff format --check .` pass locally',
+              '- [ ] `mypy app/` passes',
+              '- [ ] No stray `print()` or debugger statements',
+              '- [ ] No secrets, tokens or real credentials in the diff',
+              '',
+              '### Testing',
+              '- [ ] `pytest -q` passes and coverage stays at or above the floor',
+              '- [ ] New behaviour has a test that would fail without it',
+              '- [ ] Camera-dependent work is marked `@pytest.mark.hardware`',
+              '',
+              '### Schema and data',
+              '- [ ] Model changes ship an Alembic revision (`flask db migrate`)',
+              '- [ ] `flask db upgrade` applies to an existing database, not just an empty one',
+              '',
+              '### Security',
+              '- [ ] Mutating routes are behind `@login_required` and keep CSRF protection',
+              '- [ ] User input is validated and sanitised',
+              '',
+              '---',
+              '',
+              '**PR stats**',
+              '',
+              '| Metric | Value |',
+              '| --- | --- |',
+              `| Files changed | ${pr.changed_files} |`,
+              `| Additions | +${pr.additions} |`,
+              `| Deletions | -${pr.deletions} |`,
+              `| Total | ${pr.additions + pr.deletions} |`,
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: pr.number, body,
+            });

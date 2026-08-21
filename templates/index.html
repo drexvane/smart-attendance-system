@@ -161,7 +161,7 @@
             <div class="card-body p-4">
                 <div class="row g-3">
                     <div class="col-lg-3 col-md-6 mb-3">
-                        <a href="{{ url_for('register_student') }}" 
+                        <a href="{{ url_for('students.register') }}" 
                            class="btn btn-gradient-primary btn-lg w-100 h-100 d-flex flex-column align-items-center justify-content-center p-4 text-decoration-none hover-lift position-relative overflow-hidden">
                             <!-- Button Glow Effect -->
                             <div class="position-absolute top-0 start-0 w-100 h-100 opacity-0 hover-opacity-20 transition-all">
@@ -179,7 +179,7 @@
                     </div>
                     
                     <div class="col-lg-3 col-md-6 mb-3">
-                        <a href="{{ url_for('mark_attendance') }}" 
+                        <a href="{{ url_for('attendance.mark_page') }}" 
                            class="btn btn-gradient-success btn-lg w-100 h-100 d-flex flex-column align-items-center justify-content-center p-4 text-decoration-none hover-lift position-relative overflow-hidden">
                             <!-- Button Glow Effect -->
                             <div class="position-absolute top-0 start-0 w-100 h-100 opacity-0 hover-opacity-20 transition-all">
@@ -197,7 +197,7 @@
                     </div>
                     
                     <div class="col-lg-3 col-md-6 mb-3">
-                        <a href="{{ url_for('attendance') }}" 
+                        <a href="{{ url_for('attendance.list_attendance') }}" 
                            class="btn btn-gradient-warning btn-lg w-100 h-100 d-flex flex-column align-items-center justify-content-center p-4 text-decoration-none hover-lift position-relative overflow-hidden">
                             <!-- Button Glow Effect -->
                             <div class="position-absolute top-0 start-0 w-100 h-100 opacity-0 hover-opacity-20 transition-all">
@@ -215,7 +215,7 @@
                     </div>
                     
                     <div class="col-lg-3 col-md-6 mb-3">
-                        <a href="{{ url_for('reports') }}" 
+                        <a href="{{ url_for('attendance.reports') }}" 
                            class="btn btn-gradient-danger btn-lg w-100 h-100 d-flex flex-column align-items-center justify-content-center p-4 text-decoration-none hover-lift position-relative overflow-hidden">
                             <!-- Button Glow Effect -->
                             <div class="position-absolute top-0 start-0 w-100 h-100 opacity-0 hover-opacity-20 transition-all">
@@ -258,7 +258,7 @@
                     <button class="btn btn-glass btn-sm hover-lift" id="refreshTimeline" title="Refresh Timeline">
                         <i class="fas fa-sync-alt"></i>
                     </button>
-                    <a href="{{ url_for('attendance') }}" class="btn btn-glass btn-sm hover-lift">
+                    <a href="{{ url_for('attendance.list_attendance') }}" class="btn btn-glass btn-sm hover-lift">
                         <i class="fas fa-external-link-alt me-1"></i>View All
                     </a>
                 </div>
@@ -431,10 +431,10 @@
                             
                             <!-- Call to Action Buttons -->
                             <div class="d-flex justify-content-center gap-3 flex-wrap">
-                                <a href="{{ url_for('mark_attendance') }}" class="btn btn-gradient-primary btn-lg hover-lift">
+                                <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-gradient-primary btn-lg hover-lift">
                                     <i class="fas fa-camera me-2"></i>Start Marking Attendance
                                 </a>
-                                <a href="{{ url_for('register_student') }}" class="btn btn-glass btn-lg hover-lift">
+                                <a href="{{ url_for('students.register') }}" class="btn btn-glass btn-lg hover-lift">
                                     <i class="fas fa-user-plus me-2"></i>Register Students
                                 </a>
                             </div>

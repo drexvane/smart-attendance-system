@@ -13,7 +13,7 @@
             <i class="fas fa-search"></i>
             <input type="text" class="form-control" placeholder="Search students..." id="searchInput" onkeyup="filterStudents()">
         </div>
-        <a href="{{ url_for('register_student') }}" class="btn btn-primary">
+        <a href="{{ url_for('students.register') }}" class="btn btn-primary">
             <i class="fas fa-plus"></i>
             Add Student
         </a>
@@ -113,7 +113,7 @@
             <div class="empty-state-icon"><i class="fas fa-users"></i></div>
             <div class="empty-state-title">No students registered</div>
             <div class="empty-state-text">Get started by adding your first student.</div>
-            <a href="{{ url_for('register_student') }}" class="btn btn-primary">
+            <a href="{{ url_for('students.register') }}" class="btn btn-primary">
                 <i class="fas fa-plus"></i> Add Student
             </a>
         </div>

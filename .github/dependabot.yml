@@ -1,0 +1,69 @@
+# Dependency updates, replacing .github/workflows/dependency-update.yml.
+#
+# That workflow ran, on a schedule:
+#
+#     pip install --upgrade -r requirements.txt
+#     pip freeze > requirements.txt
+#
+# `pip freeze` writes back every *transitive* dependency of the runner's environment at
+# the exact version that happened to resolve there, so the effect was to unpin the
+# direct dependencies the project cares about and hard-pin dozens it had never chosen --
+# in one commit, with no per-package changelog and nothing to review. It also could not
+# tell a patch bump from a major one.
+#
+# Dependabot opens one reviewable PR per package instead, and CI gates each of them.
+
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: scope
+    groups:
+      # Flask and its extensions move together; separate PRs for each would conflict.
+      flask:
+        patterns:
+          - "Flask"
+          - "Flask-*"
+          - "Werkzeug"
+          - "flask-*"
+      dev-tooling:
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "pytest*"
+          - "bandit*"
+          - "pip-audit"
+          - "pre-commit"
+    ignore:
+      # Major upgrades land by hand, with the API break read first. OpenCV 5.x in
+      # particular is not a drop-in replacement for the 4.x cv2.face API this project
+      # depends on, and SQLAlchemy 3.x will not be either.
+      - dependency-name: "opencv-contrib-python-headless"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "SQLAlchemy"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci"
+    # Actions in these workflows are pinned to commit SHAs. Dependabot understands that
+    # and bumps the SHA while rewriting the trailing `# vX.Y.Z` comment, which is the
+    # only maintainable way to keep SHA pinning current.

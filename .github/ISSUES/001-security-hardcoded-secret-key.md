@@ -1,5 +1,11 @@
 # Issue #001: Security - Hardcoded Secret Key Fallback
 
+> **Status: Resolved by the backend refactor.** Config moved from `config.py` to
+> `app/config.py`. There is no hardcoded fallback: `ProductionConfig.validate()` raises at
+> startup if `SECRET_KEY` is unset, `DevelopmentConfig` generates a random key with a
+> warning, and `TestingConfig` uses a fixed key that cannot reach production. All four
+> acceptance criteria below are met. The original report is kept for the record.
+
 ## Type
 🔒 Security / Bug
 
@@ -12,7 +18,7 @@ The `config.py` file contains a hardcoded fallback secret key (`'your-secret-key
 
 ## Current Code
 ```python
-SECRET_KEY = os.environ.get('SECRET_KEY') or 'your-secret-key-here'
+SECRET_KEY = os.environ.get("SECRET_KEY") or "your-secret-key-here"
 ```
 
 ## Risk
@@ -34,7 +40,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY') or 'your-secret-key-here'
 - configuration
 
 ## Acceptance Criteria
-- [ ] No hardcoded secret key in production
-- [ ] Clear error message if SECRET_KEY not set in production
-- [ ] Development mode generates secure random key
-- [ ] Documentation updated with setup instructions
+- [x] No hardcoded secret key in production
+- [x] Clear error message if SECRET_KEY not set in production
+- [x] Development mode generates secure random key
+- [x] Documentation updated with setup instructions

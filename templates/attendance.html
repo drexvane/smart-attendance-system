@@ -10,7 +10,7 @@
                 <i class="fas fa-list me-2 icon-gradient-primary"></i>Attendance Records
             </h1>
             <div class="btn-group" role="group">
-                <a href="{{ url_for('mark_attendance') }}" class="btn btn-gradient-success hover-lift-sm">
+                <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-gradient-success hover-lift-sm">
                     <i class="fas fa-user-check me-1"></i>Mark Attendance
                 </a>
                 <button class="btn btn-gradient-info hover-lift-sm" onclick="exportData('csv')">
@@ -565,13 +565,13 @@
                         <p class="text-muted mb-4 lead">
                             {% if current_date or current_department or current_year %}
                                 Try adjusting your filters or 
-                                <a href="{{ url_for('attendance') }}" class="text-decoration-none text-gradient-primary">clear all filters</a>
+                                <a href="{{ url_for('attendance.list_attendance') }}" class="text-decoration-none text-gradient-primary">clear all filters</a>
                             {% else %}
                                 Start marking attendance to see records here
                             {% endif %}
                         </p>
                         <div class="d-flex justify-content-center gap-3 flex-wrap">
-                            <a href="{{ url_for('mark_attendance') }}" class="btn btn-gradient-primary btn-lg hover-lift">
+                            <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-gradient-primary btn-lg hover-lift">
                                 <i class="fas fa-camera me-2"></i>Mark Attendance
                             </a>
                             <button type="button" class="btn btn-glass btn-lg hover-lift" onclick="clearFilters()">

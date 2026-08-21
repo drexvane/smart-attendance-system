@@ -1,495 +1,286 @@
-# Smart Attendance System - Workflow Diagram
+# Workflow Diagrams
 
-## System Architecture Overview
+Rewritten for the current architecture. The previous version diagrammed a dlib/HOG pipeline
+generating 128-d encodings; the system does not and never did work that way. Detection is the
+res10 SSD DNN, recognition is LBPH, and there is now an authentication layer, an anti-proxy
+confirmation stage, and Alembic migrations — all reflected below.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           SMART ATTENDANCE SYSTEM                                │
-└─────────────────────────────────────────────────────────────────────────────────┘
+---
 
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   ADMIN PANEL   │    │  FACE CAPTURE   │    │ FACE RECOGNITION│    │   DATABASE      │
-│                 │    │                 │    │                 │    │                 │
-│ • Student Mgmt  │    │ • Camera Feed   │    │ • Face Detection│    │ • Student Data  │
-│ • View Records  │    │ • Image Capture │    │ • Face Encoding │    │ • Attendance    │
-│ • Generate      │    │ • Quality Check │    │ • Face Matching │    │ • Reports       │
-│   Reports       │    │                 │    │                 │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │                       │
-         └───────────────────────┼───────────────────────┼───────────────────────┘
-                                 │                       │
-                        ┌─────────────────┐    ┌─────────────────┐
-                        │  WEB INTERFACE  │    │   EXPORT SYSTEM │
-                        │                 │    │                 │
-                        │ • Dashboard     │    │ • CSV Export    │
-                        │ • Real-time     │    │ • Excel Export  │
-                        │   Updates       │    │ • PDF Reports   │
-                        │ • Notifications │    │                 │
-                        └─────────────────┘    └─────────────────┘
-```
-
-## Detailed Workflow Process
-
-### 1. Student Registration Workflow
+## 1. System architecture
 
 ```
-START: Student Registration
-         │
-         ▼
-┌─────────────────────┐
-│ Admin Login         │
-│ • Authentication    │
-│ • Access Control    │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Enter Student Info  │
-│ • Student ID        │
-│ • Name, Email       │
-│ • Department, Year  │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Upload Photo        │
-│ • Image Validation  │
-│ • Format Check      │
-│ • Quality Check     │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Face Detection      │
-│ • Detect Face       │
-│ • Validate Single   │
-│   Face              │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐    NO   ┌─────────────────────┐
-│ Face Found?         │────────►│ Show Error Message  │
-└─────────────────────┘         │ • No Face Detected  │
-         │ YES                  │ • Multiple Faces    │
-         ▼                      │ • Poor Quality      │
-┌─────────────────────┐         └─────────────────────┘
-│ Generate Encoding   │                  │
-│ • Extract Features  │                  │
-│ • Create 128D Vector│                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Save to Database    │                  │
-│ • Student Info      │                  │
-│ • Face Encoding     │                  │
-│ • Image Path        │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Registration        │                  │
-│ Successful          │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-       END ◄─────────────────────────────┘
+┌───────────────┐   HTTPS    ┌──────────────────────────────────────────────┐
+│    Browser    │ ─────────► │                 nginx (TLS)                    │
+│  templates/   │ ◄───────── │  proxies /  →  gunicorn, buffering off on the  │
+│  *_clean.html │            │  MJPEG feed (/get_video_feed)                  │
+└───────────────┘            └───────────────────────┬────────────────────────┘
+                                                      │  1 worker, gthread
+                                                      ▼
+                        ┌──────────────────────────────────────────────┐
+                        │        gunicorn -c gunicorn.conf.py           │
+                        │  ┌────────────────────────────────────────┐  │
+                        │  │   create_app()  (app/__init__.py)       │  │
+                        │  │   extensions: db, migrate, csrf,        │  │
+                        │  │               limiter, login_manager    │  │
+                        │  ├────────────────────────────────────────┤  │
+                        │  │  blueprints/   HTTP: parse, 1 service   │  │
+                        │  │      auth dashboard students attendance │  │
+                        │  │      leave recognition api              │  │
+                        │  ├────────────────────────────────────────┤  │
+                        │  │  services/     business rules, txns,    │  │
+                        │  │                aggregate SQL            │  │
+                        │  ├────────────────────────────────────────┤  │
+                        │  │  models/       schema + constraints     │  │
+                        │  └───────────────────┬────────────────────┘  │
+                        │                      │ SQLAlchemy             │
+                        │  ┌───────────────────▼────────────────────┐  │
+                        │  │  app/recognition/  (per-process singleton)│ │
+                        │  │  CameraStream → Detector → Recognizer →  │  │
+                        │  │  Pipeline (confirmation state machine)   │  │
+                        │  └───────────────────┬────────────────────┘  │
+                        └──────────────────────┼───────────────────────┘
+                                   ┌───────────┴───────────┐
+                                   ▼                       ▼
+                        ┌──────────────────┐    ┌──────────────────────┐
+                        │  SQLite / Postgres│    │  one webcam (V4L2)   │
+                        │  instance/ or DB  │    │  CAMERA_INDEX        │
+                        └──────────────────┘    └──────────────────────┘
+                                   ▲
+                        ┌──────────┴──────────┐   ┌──────────────────┐
+                        │  Redis (rate limits)│   │  face_data/       │
+                        │  RATELIMIT_STORAGE  │   │  lbph_model.yml + │
+                        └─────────────────────┘   │  samples/<pk>/    │
+                                                   └──────────────────┘
 ```
 
-### 2. Face Recognition & Attendance Marking Workflow
+The camera and the recognition pipeline are a **per-process singleton**, which is why the
+server runs exactly one worker. Concurrency comes from threads, not processes.
+
+---
+
+## 2. Student registration and face enrolment
 
 ```
-START: Attendance Session
-         │
-         ▼
-┌─────────────────────┐
-│ Initialize Camera   │
-│ • Check Hardware    │
-│ • Set Resolution    │
-│ • Test Connection   │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Load Known Faces    │
-│ • Query Database    │
-│ • Load Encodings    │
-│ • Prepare Arrays    │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Start Video Stream  │
-│ • Capture Frames    │
-│ • Display Feed      │
-│ • Real-time Process │
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐
-│ Detect Faces        │
-│ • Find Face Regions │
-│ • Extract Features  │
-│ • Generate Encodings│
-└─────────────────────┘
-         │
-         ▼
-┌─────────────────────┐    NO   ┌─────────────────────┐
-│ Face Detected?      │────────►│ Continue Monitoring │
-└─────────────────────┘         │ • Show "No Face"    │
-         │ YES                  │ • Keep Scanning     │
-         ▼                      └─────────────────────┘
-┌─────────────────────┐                  │
-│ Compare with Known  │                  │
-│ Faces               │                  │
-│ • Calculate Distance│                  │
-│ • Find Best Match   │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐    NO            │
-│ Match Found?        │─────────────────►│
-│ (Confidence > 60%)  │                  │
-└─────────────────────┘                  │
-         │ YES                           │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Check Duplicate     │                  │
-│ • Same Day Entry?   │                  │
-│ • Time Window Check │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐    YES           │
-│ Already Marked?     │─────────────────►│
-└─────────────────────┘                  │
-         │ NO                            │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Show Confirmation   │                  │
-│ • Student Name      │                  │
-│ • Confidence Score  │                  │
-│ • Confirm/Cancel    │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐    CANCEL        │
-│ User Confirms?      │─────────────────►│
-└─────────────────────┘                  │
-         │ CONFIRM                       │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Mark Attendance     │                  │
-│ • Insert Record     │                  │
-│ • Set Timestamp     │                  │
-│ • Calculate Status  │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Show Success        │                  │
-│ • Student Marked    │                  │
-│ • Time Recorded     │                  │
-│ • Status (Present/  │                  │
-│   Late)             │                  │
-└─────────────────────┘                  │
-         │                               │
-         ▼                               │
-┌─────────────────────┐                  │
-│ Continue Monitoring │◄─────────────────┘
-│ • Reset Detection   │
-│ • Wait for Next     │
-│   Student           │
-└─────────────────────┘
-         │
-         ▼
-       END (Stop Session)
+Teacher/Admin (logged in)
+        │  POST /register_student  (+ CSRF token)
+        ▼
+┌────────────────────┐   invalid    ┌───────────────────────────┐
+│ validate_student_  │ ───────────► │ 400 with field errors      │
+│ data()             │              │ (errors.py, content-negot.)│
+└─────────┬──────────┘              └───────────────────────────┘
+          │ valid
+          ▼
+┌────────────────────┐   no image / not an image
+│ decode photo with  │ ─────────────────────────► reject upload
+│ Pillow, cap dims + │
+│ MAX_CONTENT_LENGTH │
+└─────────┬──────────┘
+          │ ok
+          ▼
+┌────────────────────┐   no face   ┌───────────────────────────┐
+│ detector.detect_   │ ──────────► │ "No face detected. Use a   │
+│ largest()          │             │  clear, front-facing photo"│
+└─────────┬──────────┘             └───────────────────────────┘
+          │ one face
+          ▼
+┌───────────────────────────────────────────────┐
+│ crop (margin) → grayscale → equalise → 200×200 │
+│ store  face_data/samples/<student_pk>/NNN.png  │
+└─────────┬──────────────────────────────────────┘
+          ▼
+┌───────────────────────────────────────────────┐
+│ FaceRecognizer.train(all samples)              │
+│   persist lbph_model.yml + label_map.json      │
+│   set Student.face_model_label, samples_count, │
+│       face_enrolled_at                          │
+└─────────┬──────────────────────────────────────┘
+          ▼
+      committed; student now recognisable
 ```
 
-### 3. Data Flow Diagram
+Storing samples (not one descriptor per row) is what lets `flask rebuild-faces` retrain from
+scratch — important when a student is deleted, so no stale label keeps matching.
+
+---
+
+## 3. Recognition and attendance marking
+
+The confirmation stage is the part the project claimed but did not have.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              DATA FLOW DIAGRAM                                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-[Student Image] ──────┐
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Face Encoder    │
-              │ • OpenCV        │
-              │ • dlib          │
-              │ • face_recog    │
-              └─────────────────┘
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Face Encoding   │
-              │ (128D Vector)   │
-              └─────────────────┘
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Database        │
-              │ • Students      │
-              │ • Encodings     │
-              │ • Attendance    │
-              └─────────────────┘
-                      │
-                      ▼
-[Live Camera] ────────┐
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Face Detector   │
-              │ • Real-time     │
-              │ • Multi-thread  │
-              │ • Optimization  │
-              └─────────────────┘
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Face Matcher    │
-              │ • Compare       │
-              │ • Calculate     │
-              │   Confidence    │
-              └─────────────────┘
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Attendance      │
-              │ Record          │
-              │ • Student ID    │
-              │ • Timestamp     │
-              │ • Status        │
-              └─────────────────┘
-                      │
-                      ▼
-              ┌─────────────────┐
-              │ Reports &       │
-              │ Analytics       │
-              │ • Dashboard     │
-              │ • Export        │
-              └─────────────────┘
+Start recognition (POST /start_face_recognition, CSRF)
+        │
+        ▼
+CameraStream.acquire() ──► recognition thread runs the loop below per frame
+        │
+        ▼
+┌──────────────────────┐
+│ detector.detect()    │  res10 SSD (DNN), Haar fallback if models/ absent
+└─────────┬────────────┘
+          │ for each face box
+          ▼
+┌──────────────────────┐
+│ crop_face()          │  → grayscale 200×200
+└─────────┬────────────┘
+          ▼
+┌──────────────────────┐
+│ recognizer.predict() │  LBPH distance per candidate (lower = better)
+└─────────┬────────────┘
+          ▼
+   ┌──────┴───────────────────────────────────────────┐
+   │ GUARD 1  distance > FACE_MATCH_MAX_DISTANCE (70)? │──yes──► Unknown (red box)
+   └──────┬───────────────────────────────────────────┘
+          │ no
+          ▼
+   ┌──────────────────────────────────────────────────┐
+   │ GUARD 2  (runner_up − best) < MIN_MARGIN (8)?      │──yes──► ambiguous → reject
+   └──────┬───────────────────────────────────────────┘
+          │ no  →  matched student
+          ▼
+   ┌──────────────────────────────────────────────────┐
+   │ GUARD 3  streak += 1 (reset if student left view) │
+   │          streak < CONFIRM_FRAMES (5)?              │──yes──► amber box "3/5"
+   └──────┬───────────────────────────────────────────┘
+          │ no  →  confirmed (green box)
+          ▼
+   ┌──────────────────────────────────────────────────┐
+   │ within COOLDOWN_SECONDS (60) of last confirm?      │──yes──► hold, do not re-publish
+   └──────┬───────────────────────────────────────────┘
+          │ no
+          ▼
+   publish to _pending  (pipeline never touches the DB)
+          │
+          ▼
+Blueprint POST /auto_mark_attendance  →  attendance_service.mark()
+          │
+          ▼
+   INSERT (student_id, date) ──IntegrityError?──► rollback, return existing row
+          │ ok                                      (idempotent "already marked")
+          ▼
+   record written: status, confidence_score, marked_by="Face Recognition"
 ```
 
-### 4. System State Diagram
+Guards 1 and 2 are enforced in the recognizer; guard 3 and the cooldown in the pipeline. The
+result is that no single frame, and no ambiguous or low-confidence match, can write a record.
+
+---
+
+## 4. Request lifecycle (auth and CSRF ordering)
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                            SYSTEM STATE DIAGRAM                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-                    ┌─────────────────┐
-                    │   SYSTEM OFF    │
-                    └─────────────────┘
-                             │
-                             │ Power On
-                             ▼
-                    ┌─────────────────┐
-                    │  INITIALIZING   │
-                    │ • Load Config   │
-                    │ • Check Camera  │
-                    │ • Load Database │
-                    └─────────────────┘
-                             │
-                             │ Success
-                             ▼
-                    ┌─────────────────┐
-                    │     READY       │
-                    │ • Waiting for   │
-                    │   Commands      │
-                    └─────────────────┘
-                             │
-                ┌────────────┼────────────┐
-                │            │            │
-                ▼            ▼            ▼
-    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-    │ REGISTRATION    │ │   DETECTION     │ │   REPORTING     │
-    │ • Add Student   │ │ • Camera Active │ │ • Generate      │
-    │ • Face Capture  │ │ • Face Scanning │ │   Reports       │
-    │ • Save Data     │ │ • Recognition   │ │ • Export Data   │
-    └─────────────────┘ └─────────────────┘ └─────────────────┘
-                │                │                │
-                │                │                │
-                └────────────────┼────────────────┘
-                                 │
-                                 ▼
-                    ┌─────────────────┐
-                    │   PROCESSING    │
-                    │ • Face Analysis │
-                    │ • Database Ops  │
-                    │ • Validation    │
-                    └─────────────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │    COMPLETE     │
-                    │ • Show Results  │
-                    │ • Update UI     │
-                    │ • Log Activity  │
-                    └─────────────────┘
-                             │
-                             │ Return to Ready
-                             ▼
-                    ┌─────────────────┐
-                    │     READY       │
-                    └─────────────────┘
+Request
+   │
+   ▼
+┌───────────────────────┐   over limit   ┌──────────────┐
+│ Flask-Limiter          │ ─────────────► │ 429          │
+└─────────┬─────────────┘                └──────────────┘
+          ▼
+┌───────────────────────┐   POST w/o valid token   ┌──────────────────────────┐
+│ CSRF check (Flask-WTF) │ ───────────────────────► │ 400 CSRFError handler     │
+└─────────┬─────────────┘                          └──────────────────────────┘
+          │  ordering matters: CSRF runs BEFORE login_required, so an
+          │  unauthenticated POST surfaces as 400, not a login redirect
+          ▼
+┌───────────────────────┐   anonymous    ┌──────────────────────────┐
+│ @login_required        │ ─────────────► │ 302 → /login?next=…       │
+└─────────┬─────────────┘                │ (or 401 for JSON callers) │
+          ▼                              └──────────────────────────┘
+┌───────────────────────┐   wrong role   ┌──────────────┐
+│ @roles_required(admin) │ ─────────────► │ 403           │
+└─────────┬─────────────┘                └──────────────┘
+          ▼
+   blueprint → service → model → response
+          │
+          ▼ (any unhandled exception)
+   errors.py: log traceback + correlation id server-side,
+              return generic message (no str(exception) to client)
 ```
 
-### 5. Database Entity Relationship Diagram
+---
+
+## 5. Database schema
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                         DATABASE SCHEMA DIAGRAM                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────┐          ┌────────────────────────────────────┐
+│ users            │          │ students                            │
+├──────────────────┤          ├────────────────────────────────────┤
+│ id PK            │          │ id PK                               │
+│ username UQ      │          │ student_id UQ    name(ix)  email UQ │
+│ email UQ         │          │ department(ix)  year(ix)  section   │
+│ password_hash    │          │ image_path                          │
+│ role             │          │ face_model_label UQ                 │
+│ is_active        │          │ face_samples_count  face_enrolled_at│
+│ last_login_at    │          │ is_active(ix)  created/updated_at   │
+└──────────────────┘          └───────────────┬─────────────────────┘
+   (no FK to the rest;                         │ 1
+    operator accounts)                         │
+                              ┌─────────────────┴───────┬───────────────────┐
+                              │ N                        │ N                 │
+                   ┌──────────▼───────────────┐  ┌──────▼──────────────────┐
+                   │ attendance_records        │  │ leave_requests           │
+                   ├──────────────────────────┤  ├─────────────────────────┤
+                   │ id PK                     │  │ id PK                    │
+                   │ student_id FK ─► ON DELETE│  │ student_id FK ─► CASCADE │
+                   │             CASCADE (ix)  │  │ leave_type               │
+                   │ date (ix)                 │  │ start_date  end_date     │
+                   │ time_in  time_out         │  │ reason                   │
+                   │ status (ix)               │  │ status (ix)              │
+                   │ confidence_score          │  │ reviewed_by reviewed_at  │
+                   │ marked_by                 │  │ review_notes             │
+                   │ notes                     │  │ created/updated_at       │
+                   ├──────────────────────────┤  └─────────────────────────┘
+                   │ UNIQUE(student_id, date)  │◄── the idempotency constraint
+                   │ INDEX(date, status)       │
+                   └──────────────────────────┘
 
-┌─────────────────────────┐                    ┌─────────────────────────┐
-│       STUDENTS          │                    │   ATTENDANCE_RECORDS    │
-├─────────────────────────┤                    ├─────────────────────────┤
-│ id (PK)                 │                    │ id (PK)                 │
-│ student_id (UNIQUE)     │                    │ student_id (FK)         │
-│ name                    │                    │ date                    │
-│ email (UNIQUE)          │                    │ time_in                 │
-│ phone                   │                    │ time_out                │
-│ department              │                    │ status                  │
-│ year                    │                    │ confidence_score        │
-│ section                 │                    │ created_at              │
-│ face_encoding (TEXT)    │                    └─────────────────────────┘
-│ image_path              │                               │
-│ is_active               │                               │
-│ created_at              │                               │
-│ updated_at              │                               │
-└─────────────────────────┘                               │
-            │                                             │
-            │ 1                                        N  │
-            └─────────────────────────────────────────────┘
-                              HAS
-
-┌─────────────────────────┐
-│  ATTENDANCE_SESSIONS    │
-├─────────────────────────┤
-│ id (PK)                 │
-│ session_name            │
-│ subject                 │
-│ teacher_name            │
-│ department              │
-│ year                    │
-│ section                 │
-│ start_time              │
-│ end_time                │
-│ is_active               │
-│ created_at              │
-└─────────────────────────┘
+   attendance_sessions — optional class/period grouping, retained from the
+   original schema, not FK-linked.
 ```
 
-### 6. Security and Error Handling Flow
+---
+
+## 6. Migration sequence
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                        SECURITY & ERROR HANDLING                                │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────┐
-│ User Request    │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Input Validation│
-│ • Sanitize Data │
-│ • Check Format  │
-│ • Validate Size │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐    FAIL   ┌─────────────────┐
-│ Validation OK?  │──────────►│ Return Error    │
-└─────────────────┘           │ • Error Message │
-         │ PASS               │ • Log Attempt   │
-         ▼                    └─────────────────┘
-┌─────────────────┐
-│ Authentication  │
-│ • Check Session │
-│ • Verify Access │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐    FAIL   ┌─────────────────┐
-│ Auth Success?   │──────────►│ Access Denied   │
-└─────────────────┘           │ • Redirect      │
-         │ PASS               │ • Log Attempt   │
-         ▼                    └─────────────────┘
-┌─────────────────┐
-│ Process Request │
-│ • Execute Logic │
-│ • Database Ops  │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐    ERROR  ┌─────────────────┐
-│ Processing OK?  │──────────►│ Handle Error    │
-└─────────────────┘           │ • Log Error     │
-         │ SUCCESS            │ • User Message  │
-         ▼                    │ • Rollback      │
-┌─────────────────┐           └─────────────────┘
-│ Return Response │
-│ • Success Data  │
-│ • Status Code   │
-└─────────────────┘
+(fresh DB)              (existing DB predating the refactor)
+    │                              │
+    │                    flask db stamp 0001_baseline
+    ▼                              ▼
+0001_baseline ──────► 0002_dedupe_attendance ──────► 0003_auth_and_constraints
+ today's schema        collapse duplicate            users table;
+ (for stamping)        (student_id, date),           UNIQUE(student_id,date) + indexes;
+                       keep earliest                 marked_by; face_* columns;
+                                                      NULL legacy face_encoding
 ```
 
-### 7. Performance Optimization Flow
+`0002` must run before `0003`: the unique constraint cannot be created while duplicates
+exist. `0003` nulls the legacy histogram encodings, so **students must be re-enrolled** after
+upgrading an old database. `flask db check` gates model/migration drift in CI.
+
+---
+
+## 7. CI/CD pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                         PERFORMANCE OPTIMIZATION                                │
-└─────────────────────────────────────────────────────────────────────────────────┘
+push / PR
+    │
+    ▼
+ci.yml ── lint (ruff check + format) ─► test (3.11, 3.12: pytest, cov ≥ 75%) ─┐
+              │ mypy app/                test-postgres (postgres:17-alpine:     │
+              │                            db upgrade + db check)               │
+              │                          security (bandit, pip-audit)           │
+              └──────────────────────────────────────────────────────┬────────┘
+                                                                       ▼
+                                              build ── import smoke ── gunicorn boot
+                                                       assert /healthz 200, / → 302
+docker.yml ── build image ─► Trivy (HIGH/CRITICAL, gating) ─► run container,
+                              assert /healthz + HEALTHCHECK ─► THEN push
+cd.yml ── full gate ─► build artifact + image ─► DRY-RUN deploy (deploys nothing)
 
-┌─────────────────┐
-│ Camera Frame    │
-│ (640x480)       │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Resize Frame    │
-│ • Scale to 25%  │
-│ • 160x120       │
-│ • Faster Process│
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Face Detection  │
-│ • HOG Algorithm │
-│ • Skip Frames   │
-│ • Multi-thread  │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Encoding Cache  │
-│ • Store Results │
-│ • Avoid Recomp  │
-│ • Memory Mgmt   │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Database Pool   │
-│ • Connection    │
-│   Pooling       │
-│ • Query Cache   │
-└─────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Response        │
-│ • Optimized     │
-│ • Fast Delivery │
-└─────────────────┘
+Every gate can fail. No continue-on-error / || true on a quality gate.
+All actions pinned to commit SHAs.
 ```
 
-This comprehensive workflow diagram illustrates the complete process flow of the Smart Attendance System, from student registration through face recognition to attendance reporting. Each component is designed to work seamlessly together while maintaining security, performance, and reliability standards.
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for running each stage locally and
+[FIXES_APPLIED.md](FIXES_APPLIED.md) for what these gates were hiding before.

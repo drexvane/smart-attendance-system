@@ -12,7 +12,7 @@
         <h1 class="page-title"><span class="page-title-blue">Student</span> Management</h1>
         <p class="page-subtitle">Manage all registered students in the attendance system</p>
         <div class="mt-4">
-            <a href="{{ url_for('register_student') }}" class="btn btn-primary btn-lg">
+            <a href="{{ url_for('students.register') }}" class="btn btn-primary btn-lg">
                 <i class="fas fa-plus"></i>
                 Add New Student
             </a>
@@ -41,7 +41,7 @@
     <!-- Search & Filter -->
     <div class="card mb-4 slide-up">
         <div class="card-body">
-            <form method="GET" action="{{ url_for('students') }}" class="flex gap-3 flex-wrap items-center">
+            <form method="GET" action="{{ url_for('students.list_students') }}" class="flex gap-3 flex-wrap items-center">
                 <div class="form-group" style="margin-bottom: 0; flex: 1; min-width: 200px;">
                     <div style="position: relative;">
                         <i class="fas fa-search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
@@ -76,7 +76,7 @@
                     <i class="fas fa-search"></i> Search
                 </button>
                 {% if current_search or current_department or current_year %}
-                <a href="{{ url_for('students') }}" class="btn btn-secondary">
+                <a href="{{ url_for('students.list_students') }}" class="btn btn-secondary">
                     <i class="fas fa-times"></i> Clear
                 </a>
                 {% endif %}
@@ -150,7 +150,7 @@
                 </div>
                 <div class="pagination">
                     {% if pagination.has_prev %}
-                    <a href="{{ url_for('students', page=pagination.prev_num, search=current_search, department=current_department, year=current_year, per_page=per_page) }}" 
+                    <a href="{{ url_for('students.list_students', page=pagination.prev_num, search=current_search, department=current_department, year=current_year, per_page=per_page) }}" 
                        class="pagination-btn">
                         <i class="fas fa-chevron-left"></i>
                     </a>
@@ -163,7 +163,7 @@
                     {% for page_num in pagination.iter_pages() %}
                         {% if page_num %}
                             {% if page_num != pagination.page %}
-                            <a href="{{ url_for('students', page=page_num, search=current_search, department=current_department, year=current_year, per_page=per_page) }}" 
+                            <a href="{{ url_for('students.list_students', page=page_num, search=current_search, department=current_department, year=current_year, per_page=per_page) }}" 
                                class="pagination-btn">{{ page_num }}</a>
                             {% else %}
                             <span class="pagination-btn active">{{ page_num }}</span>
@@ -174,7 +174,7 @@
                     {% endfor %}
                     
                     {% if pagination.has_next %}
-                    <a href="{{ url_for('students', page=pagination.next_num, search=current_search, department=current_department, year=current_year, per_page=per_page) }}" 
+                    <a href="{{ url_for('students.list_students', page=pagination.next_num, search=current_search, department=current_department, year=current_year, per_page=per_page) }}" 
                        class="pagination-btn">
                         <i class="fas fa-chevron-right"></i>
                     </a>
@@ -194,7 +194,7 @@
                 <div class="empty-state-icon"><i class="fas fa-users"></i></div>
                 <div class="empty-state-title">No students registered</div>
                 <div class="empty-state-text">Get started by adding your first student.</div>
-                <a href="{{ url_for('register_student') }}" class="btn btn-primary"><i class="fas fa-plus"></i> Add Student</a>
+                <a href="{{ url_for('students.register') }}" class="btn btn-primary"><i class="fas fa-plus"></i> Add Student</a>
             </div>
         </div>
         {% endif %}

@@ -12,9 +12,10 @@ Thank you for your interest in contributing! This document provides guidelines a
    ```
 3. **Set up the development environment:**
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   pip install -e ".[dev]"    # installs ruff, mypy, pytest, pre-commit, etc.
+   pre-commit install         # runs ruff (lint + format) on every commit
    ```
 4. **Create a branch:**
    ```bash
@@ -51,42 +52,51 @@ docs(readme): update installation instructions
 
 1. **Update documentation** if needed
 2. **Add tests** for new functionality
-3. **Ensure all tests pass:**
+3. **Run the full gate locally** (this is what CI enforces, so a green run here means a green CI):
    ```bash
-   pytest tests/ -v
+   ruff check . && ruff format --check . && mypy app/ && pytest -q --cov=app
    ```
 4. **Follow the PR template** when creating your PR
 5. **Request review** from maintainers
 
 ## 🧪 Testing
 
-Run tests locally before submitting:
+Tests live under `tests/unit/` and `tests/integration/`, on an in-memory SQLite
+`TestingConfig` (fixtures in `tests/conftest.py`). Run them before submitting:
 
 ```bash
-# Run all tests
-pytest tests/ -v
+# Whole suite, quiet, with coverage (75% floor, enforced by CI and pyproject.toml)
+pytest -q --cov=app
 
-# Run with coverage
-pytest tests/ --cov=. --cov-report=html
+# A single area
+pytest tests/integration/test_auth.py -v
 
-# Run specific test file
-pytest tests/test_leave_management.py -v
+# Hardware-dependent tests (a real camera) are marked and deselected by default:
+pytest -m hardware        # opt in locally
 ```
+
+The suite also runs against PostgreSQL in CI; see
+[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md#postgresql) to reproduce that leg.
 
 ## 📋 Code Style
 
-- Follow PEP 8 guidelines
-- Use meaningful variable and function names
-- Add docstrings to functions and classes
-- Keep functions focused and small
+Ruff is the single source of truth for lint **and** formatting; mypy type-checks `app/`.
+All config lives in `pyproject.toml` — do not add `flake8`, `black`, or `isort`, which the
+project deliberately replaced (one tool, one config, so local and CI agree).
 
-**Linting:**
 ```bash
-pip install flake8 black isort
-flake8 .
-black --check .
-isort --check-only .
+ruff check .           # lint (includes import sorting and security rules)
+ruff check . --fix     # autofix what it can
+ruff format .          # format
+mypy app/              # types
+
+# Security scanners CI also gates on:
+bandit -c pyproject.toml -r app/ wsgi.py run.py gunicorn.conf.py
+pip-audit --strict --requirement requirements.txt
 ```
+
+`pre-commit install` wires ruff into your commits with the same pinned versions as CI. New
+dependencies must be pinned in both `pyproject.toml` and `requirements.txt`.
 
 ## 🐛 Reporting Bugs
 

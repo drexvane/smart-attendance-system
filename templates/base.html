@@ -50,7 +50,7 @@
     <nav class="navbar navbar-expand-lg fixed-top glass-nav fade-in-down" role="navigation" aria-label="Main navigation">
         <div class="container">
             <!-- Enhanced Brand Logo with Gradient -->
-            <a class="navbar-brand brand-enhanced" href="{{ url_for('index') }}" aria-label="Smart Attendance System - Go to dashboard">
+            <a class="navbar-brand brand-enhanced" href="{{ url_for('dashboard.index') }}" aria-label="Smart Attendance System - Go to dashboard">
                 <div class="brand-icon-container">
                     <i class="fas fa-user-check brand-icon" aria-hidden="true"></i>
                 </div>
@@ -69,7 +69,7 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto nav-enhanced" role="menubar">
                     <li class="nav-item" role="none">
-                        <a class="nav-link nav-link-enhanced" href="{{ url_for('index') }}" data-page="dashboard" role="menuitem" aria-label="Go to dashboard">
+                        <a class="nav-link nav-link-enhanced" href="{{ url_for('dashboard.index') }}" data-page="dashboard" role="menuitem" aria-label="Go to dashboard">
                             <div class="nav-icon-container">
                                 <i class="fas fa-home nav-icon" aria-hidden="true"></i>
                             </div>
@@ -78,7 +78,7 @@
                         </a>
                     </li>
                     <li class="nav-item" role="none">
-                        <a class="nav-link nav-link-enhanced" href="{{ url_for('students') }}" data-page="students" role="menuitem" aria-label="Manage students">
+                        <a class="nav-link nav-link-enhanced" href="{{ url_for('students.list_students') }}" data-page="students" role="menuitem" aria-label="Manage students">
                             <div class="nav-icon-container">
                                 <i class="fas fa-users nav-icon" aria-hidden="true"></i>
                             </div>
@@ -87,7 +87,7 @@
                         </a>
                     </li>
                     <li class="nav-item" role="none">
-                        <a class="nav-link nav-link-enhanced" href="{{ url_for('mark_attendance') }}" data-page="mark-attendance" role="menuitem" aria-label="Mark attendance using camera">
+                        <a class="nav-link nav-link-enhanced" href="{{ url_for('attendance.mark_page') }}" data-page="mark-attendance" role="menuitem" aria-label="Mark attendance using camera">
                             <div class="nav-icon-container">
                                 <i class="fas fa-camera nav-icon" aria-hidden="true"></i>
                             </div>
@@ -105,14 +105,14 @@
                         </a>
                         <ul class="dropdown-menu glass-dropdown" role="menu" aria-labelledby="attendanceDropdown">
                             <li role="none">
-                                <a class="dropdown-item dropdown-item-enhanced" href="{{ url_for('attendance') }}" role="menuitem" aria-label="View attendance records">
+                                <a class="dropdown-item dropdown-item-enhanced" href="{{ url_for('attendance.list_attendance') }}" role="menuitem" aria-label="View attendance records">
                                     <i class="fas fa-list me-2" aria-hidden="true"></i>
                                     <span>View Records</span>
                                 </a>
                             </li>
                             <li role="separator"><hr class="dropdown-divider glass-divider"></li>
                             <li role="none">
-                                <a class="dropdown-item dropdown-item-enhanced" href="{{ url_for('mark_attendance') }}" role="menuitem" aria-label="Mark attendance">
+                                <a class="dropdown-item dropdown-item-enhanced" href="{{ url_for('attendance.mark_page') }}" role="menuitem" aria-label="Mark attendance">
                                     <i class="fas fa-user-check me-2" aria-hidden="true"></i>
                                     <span>Mark Attendance</span>
                                 </a>
@@ -120,7 +120,7 @@
                         </ul>
                     </li>
                     <li class="nav-item" role="none">
-                        <a class="nav-link nav-link-enhanced" href="{{ url_for('reports') }}" data-page="reports" role="menuitem" aria-label="View reports and analytics">
+                        <a class="nav-link nav-link-enhanced" href="{{ url_for('attendance.reports') }}" data-page="reports" role="menuitem" aria-label="View reports and analytics">
                             <div class="nav-icon-container">
                                 <i class="fas fa-chart-bar nav-icon" aria-hidden="true"></i>
                             </div>
@@ -129,7 +129,7 @@
                         </a>
                     </li>
                     <li class="nav-item" role="none">
-                        <a class="nav-link nav-link-enhanced" href="{{ url_for('analytics') }}" data-page="analytics" role="menuitem" aria-label="Analytics dashboard">
+                        <a class="nav-link nav-link-enhanced" href="{{ url_for('dashboard.analytics') }}" data-page="analytics" role="menuitem" aria-label="Analytics dashboard">
                             <div class="nav-icon-container">
                                 <i class="fas fa-chart-line nav-icon" aria-hidden="true"></i>
                             </div>
@@ -138,7 +138,7 @@
                         </a>
                     </li>
                     <li class="nav-item" role="none">
-                        <a class="nav-link nav-link-enhanced" href="{{ url_for('leave_management') }}" data-page="leave" role="menuitem" aria-label="Leave management">
+                        <a class="nav-link nav-link-enhanced" href="{{ url_for('leave.index') }}" data-page="leave" role="menuitem" aria-label="Leave management">
                             <div class="nav-icon-container">
                                 <i class="fas fa-calendar-minus nav-icon" aria-hidden="true"></i>
                             </div>

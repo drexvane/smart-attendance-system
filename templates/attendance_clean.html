@@ -12,10 +12,10 @@
         <h1 class="page-title"><span class="page-title-blue">Attendance</span> Records</h1>
         <p class="page-subtitle">View and manage all attendance history</p>
         <div class="mt-4 flex gap-2 justify-center">
-            <a href="{{ url_for('export_attendance') }}?format=csv" class="btn btn-secondary">
+            <a href="{{ url_for('attendance.export') }}?format=csv" class="btn btn-secondary">
                 <i class="fas fa-download"></i> Export CSV
             </a>
-            <a href="{{ url_for('mark_attendance') }}" class="btn btn-primary">
+            <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-primary">
                 <i class="fas fa-camera"></i> Mark Attendance
             </a>
         </div>
@@ -96,7 +96,7 @@
                 <div style="margin-top: 20px;">
                     <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> Search</button>
                     {% if current_search or current_status or current_department or current_year %}
-                    <a href="{{ url_for('attendance') }}" class="btn btn-ghost">Clear</a>
+                    <a href="{{ url_for('attendance.list_attendance') }}" class="btn btn-ghost">Clear</a>
                     {% endif %}
                 </div>
             </form>
@@ -176,7 +176,7 @@
                 </div>
                 <div class="pagination">
                     {% if pagination.has_prev %}
-                    <a href="{{ url_for('attendance', page=pagination.prev_num, search=current_search, date=current_date, department=current_department, year=current_year, status=current_status, per_page=per_page) }}" 
+                    <a href="{{ url_for('attendance.list_attendance', page=pagination.prev_num, search=current_search, date=current_date, department=current_department, year=current_year, status=current_status, per_page=per_page) }}" 
                        class="pagination-btn">
                         <i class="fas fa-chevron-left"></i>
                     </a>
@@ -189,7 +189,7 @@
                     {% for page_num in pagination.iter_pages() %}
                         {% if page_num %}
                             {% if page_num != pagination.page %}
-                            <a href="{{ url_for('attendance', page=page_num, search=current_search, date=current_date, department=current_department, year=current_year, status=current_status, per_page=per_page) }}" 
+                            <a href="{{ url_for('attendance.list_attendance', page=page_num, search=current_search, date=current_date, department=current_department, year=current_year, status=current_status, per_page=per_page) }}" 
                                class="pagination-btn">{{ page_num }}</a>
                             {% else %}
                             <span class="pagination-btn active">{{ page_num }}</span>
@@ -200,7 +200,7 @@
                     {% endfor %}
                     
                     {% if pagination.has_next %}
-                    <a href="{{ url_for('attendance', page=pagination.next_num, search=current_search, date=current_date, department=current_department, year=current_year, status=current_status, per_page=per_page) }}" 
+                    <a href="{{ url_for('attendance.list_attendance', page=pagination.next_num, search=current_search, date=current_date, department=current_department, year=current_year, status=current_status, per_page=per_page) }}" 
                        class="pagination-btn">
                         <i class="fas fa-chevron-right"></i>
                     </a>
@@ -227,9 +227,9 @@
                     {% endif %}
                 </div>
                 {% if not current_date %}
-                <a href="{{ url_for('mark_attendance') }}" class="btn btn-primary"><i class="fas fa-camera"></i> Mark Attendance</a>
+                <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-primary"><i class="fas fa-camera"></i> Mark Attendance</a>
                 {% else %}
-                <a href="{{ url_for('attendance') }}" class="btn btn-secondary"><i class="fas fa-times"></i> Clear Filters</a>
+                <a href="{{ url_for('attendance.list_attendance') }}" class="btn btn-secondary"><i class="fas fa-times"></i> Clear Filters</a>
                 {% endif %}
             </div>
         </div>

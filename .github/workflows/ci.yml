@@ -1,130 +1,286 @@
-name: CI Pipeline
+name: CI
+
+# Every gate in this workflow can fail the build.
+#
+# The previous version could not.  Each step carried `continue-on-error: true`, `|| true`
+# or `--exit-zero`, including the one step that would have caught the reason the
+# application could not start at all: `flake8 --select=...,F82` flags an undefined name,
+# and `rate_limit` was used as a decorator on six routes and defined nowhere.  The build
+# job's own smoke test -- `python -c "from app import app"` -- was suffixed `|| true`.
+# The pipeline was green over an application that raised NameError on import.
+#
+# Actions are pinned to commit SHAs: a mutable tag like `@v4` is a supply-chain hole,
+# because whoever controls the tag controls what runs with access to this repository.
 
 on:
   push:
-    branches: [master, main, develop]
+    branches: [master, main, develop, 'refactor/**']
   pull_request:
     branches: [master, main, develop]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: nothing here needs to write to the repository.
+permissions:
+  contents: read
+
 env:
-  PYTHON_VERSION: '3.10'
+  PYTHON_VERSION: '3.12'
   FLASK_ENV: testing
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
 
 jobs:
   lint:
-    name: Lint and Format
+    name: Lint, format and types
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-      
-      - name: Install linting tools
-        run: pip install flake8 black isort
-      
-      - name: Run flake8 (syntax errors)
-        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=venv,__pycache__,.git
-        continue-on-error: true
-      
-      - name: Run flake8 (style)
-        run: flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics --exclude=venv,__pycache__,.git
-        continue-on-error: true
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
 
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install security tools
-        run: pip install bandit
-      
-      - name: Run Bandit security scan
-        run: bandit -r . -x ./tests,./venv,./.git -f json -o bandit-report.json || true
-      
-      - name: Upload security reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-reports
-          path: bandit-report.json
-        if: always()
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # F821 (undefined name) lives in this check.  It is the gate that was missing.
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format --check
+        run: ruff format --check --diff .
+
+      - name: mypy
+        run: mypy app/
 
   test:
-    name: Test Python ${{ matrix.python-version }}
+    name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     needs: lint
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11']
-    
+        # 3.12 is primary, 3.11 is the supported floor.
+        python-version: ['3.11', '3.12']
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
-      
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-cov
-      
-      - name: Run tests
-        run: pytest tests/ -v --cov=. --cov-report=xml || echo "Tests completed"
-        env:
-          FLASK_ENV: testing
-        continue-on-error: true
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
-        continue-on-error: true
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
 
-  build:
-    name: Build
+      # opencv-contrib-python-headless still links against these even headless.
+      - name: Install OpenCV runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # Hardware-marked tests are deselected by pyproject's addopts: one of the old test
+      # files opened a real camera, which on a runner blocks until the job times out.
+      - name: pytest
+        run: pytest -q --cov=app --cov-report=xml --cov-report=term --cov-fail-under=75
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Upload is reporting, not a gate: a Codecov outage must not block a merge.
+          fail_ci_if_error: false
+
+  test-postgres:
+    name: Tests on PostgreSQL
     runs-on: ubuntu-latest
-    needs: [lint, test]
-    if: always() && needs.lint.result != 'failure'
+    needs: lint
+    # .env.example advertises a DATABASE_URL / PostgreSQL deployment that had never once
+    # been exercised.  This leg runs the same suite against a real server so that path
+    # is either working or visibly broken.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: attendance
+          POSTGRES_PASSWORD: attendance
+          POSTGRES_DB: attendance_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install dependencies
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install OpenCV runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install
+        run: |
+          pip install -e ".[dev]"
+          pip install "psycopg[binary]==3.2.10"
+
+      - name: pytest against PostgreSQL
+        env:
+          # TestingConfig reads this; it falls back to in-memory SQLite when unset.
+          TEST_DATABASE_URL: postgresql+psycopg://attendance:attendance@localhost:5432/attendance_test
+        run: pytest -q
+
+      - name: Migrations apply to an empty PostgreSQL database
+        env:
+          FLASK_ENV: development
+          DATABASE_URL: postgresql+psycopg://attendance:attendance@localhost:5432/attendance_migrate
+          SECRET_KEY: ci-only-not-a-real-secret
+        run: |
+          PGPASSWORD=attendance createdb -h localhost -U attendance attendance_migrate
+          flask --app wsgi db upgrade
+          # An autogenerate diff against the freshly migrated schema must be empty:
+          # if the models and the migrations have drifted, this is where it shows.
+          flask --app wsgi db check
+
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      # Gating. Exclusions and per-test skips are declared in pyproject's [tool.bandit],
+      # so a suppression is reviewable in a diff rather than hidden behind `|| true`.
+      - name: bandit
+        run: bandit -c pyproject.toml -r app/ wsgi.py run.py gunicorn.conf.py
+
+      - name: bandit (SARIF report for the Security tab)
+        if: always()
+        run: bandit -c pyproject.toml -r app/ -f json -o bandit-report.json || true
+
+      # Known-vulnerable dependencies fail the build. If an advisory has no fix yet,
+      # add `--ignore-vuln GHSA-xxxx` here with a comment naming the reason and a date.
+      - name: pip-audit
+        run: pip-audit --strict --requirement requirements.txt
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-reports
+          path: bandit-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  build:
+    name: Build and smoke test
+    runs-on: ubuntu-latest
+    # `needs` with no `if: always()`: the artifact is only built over green gates. The
+    # old job ran with `if: always() && needs.lint.result != 'failure'`, which let a
+    # failing test suite through.
+    needs: [lint, test, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install OpenCV runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: Install
         run: pip install -r requirements.txt
-      
-      - name: Verify app can start
-        run: timeout 10 python -c "from app import app; print('App imports successfully')" || true
-      
-      - name: Create build artifact
+
+      # No `|| true`. This is the check that the previous pipeline neutered.
+      - name: Application imports
+        env:
+          SECRET_KEY: ci-only-not-a-real-secret
+        run: python -c "from wsgi import app; print('imported', app.name)"
+
+      - name: Boot under gunicorn and assert /healthz is 200
+        env:
+          SECRET_KEY: ci-only-not-a-real-secret
+          FLASK_ENV: production
+          DATABASE_URL: sqlite:///ci-smoke.db
+        run: |
+          set -euo pipefail
+          flask --app wsgi db upgrade
+          gunicorn -c gunicorn.conf.py wsgi:app --bind 127.0.0.1:5000 &
+          GUNICORN_PID=$!
+          trap 'kill "$GUNICORN_PID" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/healthz > healthz.json; then
+              break
+            fi
+            if ! kill -0 "$GUNICORN_PID" 2>/dev/null; then
+              echo "gunicorn exited before serving a request"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          cat healthz.json
+          # `database: ok` proves the health check reached the database, not just Flask.
+          grep -q '"database": *"ok"' healthz.json
+
+          # An unauthenticated request to the dashboard must redirect to the login page.
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5000/)
+          test "$code" = "302" || { echo "expected 302 from /, got $code"; exit 1; }
+
+      - name: Build distributable artifact
         run: |
           mkdir -p dist
-          zip -r dist/smart-attendance-system-${{ github.sha }}.zip . \
-            -x "*.git*" -x "*__pycache__*" -x "*.pyc" -x "dist/*" -x "*.log" -x "instance/*" -x ".env*" -x "*.db"
-      
+          zip -r "dist/attendance-system-${GITHUB_SHA}.zip" . \
+            -x '*.git*' '*__pycache__*' '*.pyc' 'dist/*' '*.log' 'instance/*' \
+               '.env*' '*.db' '.venv/*' '.mypy_cache/*' '.ruff_cache/*' \
+               '.pytest_cache/*' 'face_data/*' 'student_images/*' 'exports/*'
+
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-${{ github.sha }}
           path: dist/

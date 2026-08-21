@@ -1,0 +1,69 @@
+# The same gates CI runs, on the machine where the code is written.
+#
+#     pip install -e ".[dev]" && pre-commit install
+#
+# Versions are pinned to match pyproject's [project.optional-dependencies].dev exactly.
+# A hook that lints with a different ruff than CI is worse than no hook: it teaches you
+# that a commit is clean and then the pipeline disagrees.
+
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        # The DNN caffemodel is 5.1 MB and legitimately tracked; nothing else here
+        # should be arriving by accident.
+        args: [--maxkb=6000]
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: debug-statements
+      - id: detect-private-key
+      - id: check-case-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.3.1
+    hooks:
+      - id: mypy
+        files: ^app/
+        # mypy in a hook environment cannot see the project's installed packages, so the
+        # ones it actually needs stubs or real types from are listed here.
+        additional_dependencies:
+          - flask==3.1.3
+          - flask-sqlalchemy==3.1.1
+          - flask-login==0.6.3
+          - flask-wtf==1.3.0
+          - sqlalchemy==2.0.52
+          - numpy>=1.26,<3
+          - types-bleach
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: ["-c", "pyproject.toml"]
+        additional_dependencies: ["bandit[toml]"]
+        exclude: ^(tests|scripts|migrations)/
+
+exclude: |
+  (?x)^(
+      migrations/versions/.*
+    | static/.*
+    | scripts/.*
+    | templates/.*\.html
+  )$

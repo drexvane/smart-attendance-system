@@ -29,11 +29,11 @@
             </p>
             
             <div class="hero-actions">
-                <a href="{{ url_for('mark_attendance') }}" class="btn btn-primary btn-xl">
+                <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-primary btn-xl">
                     <i class="fas fa-camera"></i>
                     Mark Attendance
                 </a>
-                <a href="{{ url_for('register_student') }}" class="btn btn-secondary btn-xl">
+                <a href="{{ url_for('students.register') }}" class="btn btn-secondary btn-xl">
                     <i class="fas fa-user-plus"></i>
                     Add Student
                 </a>
@@ -79,31 +79,31 @@
     
     <!-- Feature Cards -->
     <div class="feature-grid">
-        <a href="{{ url_for('mark_attendance') }}" class="feature-card slide-up stagger-1">
+        <a href="{{ url_for('attendance.mark_page') }}" class="feature-card slide-up stagger-1">
             <div class="feature-icon"><i class="fas fa-camera"></i></div>
             <div class="feature-title">Face Recognition</div>
             <div class="feature-desc">Mark attendance instantly using AI-powered face detection technology</div>
         </a>
         
-        <a href="{{ url_for('students') }}" class="feature-card slide-up stagger-2">
+        <a href="{{ url_for('students.list_students') }}" class="feature-card slide-up stagger-2">
             <div class="feature-icon"><i class="fas fa-users"></i></div>
             <div class="feature-title">Manage Students</div>
             <div class="feature-desc">View, add, edit and manage all student records in one place</div>
         </a>
         
-        <a href="{{ url_for('attendance') }}" class="feature-card slide-up stagger-3">
+        <a href="{{ url_for('attendance.list_attendance') }}" class="feature-card slide-up stagger-3">
             <div class="feature-icon"><i class="fas fa-clipboard-list"></i></div>
             <div class="feature-title">Attendance Records</div>
             <div class="feature-desc">View complete attendance history with filters and export options</div>
         </a>
         
-        <a href="{{ url_for('leave_management') }}" class="feature-card slide-up stagger-4">
+        <a href="{{ url_for('leave.index') }}" class="feature-card slide-up stagger-4">
             <div class="feature-icon"><i class="fas fa-calendar-minus"></i></div>
             <div class="feature-title">Leave Management</div>
             <div class="feature-desc">Handle student leave requests with approval workflow</div>
         </a>
         
-        <a href="{{ url_for('reports') }}" class="feature-card slide-up stagger-5">
+        <a href="{{ url_for('attendance.reports') }}" class="feature-card slide-up stagger-5">
             <div class="feature-icon"><i class="fas fa-chart-bar"></i></div>
             <div class="feature-title">Reports & Analytics</div>
             <div class="feature-desc">Generate detailed reports and visualize attendance trends</div>
@@ -114,7 +114,7 @@
     <div class="card mt-8 slide-up">
         <div class="card-header">
             <h3 class="card-title"><i class="fas fa-history text-primary" style="margin-right: 8px;"></i>Recent Activity</h3>
-            <a href="{{ url_for('attendance') }}" class="btn btn-secondary btn-sm">View All</a>
+            <a href="{{ url_for('attendance.list_attendance') }}" class="btn btn-secondary btn-sm">View All</a>
         </div>
         {% if recent_records and recent_records|length > 0 %}
         <div class="card-body">
@@ -145,7 +145,7 @@
                 <div class="empty-state-icon"><i class="fas fa-clipboard-list"></i></div>
                 <div class="empty-state-title">No recent activity</div>
                 <div class="empty-state-text">Start marking attendance to see activity here.</div>
-                <a href="{{ url_for('mark_attendance') }}" class="btn btn-primary"><i class="fas fa-camera"></i> Mark Attendance</a>
+                <a href="{{ url_for('attendance.mark_page') }}" class="btn btn-primary"><i class="fas fa-camera"></i> Mark Attendance</a>
             </div>
         </div>
         {% endif %}

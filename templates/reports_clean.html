@@ -66,7 +66,7 @@
             <h3 class="card-title"><i class="fas fa-download text-primary" style="margin-right: 8px;"></i>Export Data</h3>
         </div>
         <div class="card-body">
-            <form method="GET" action="{{ url_for('export_attendance') }}" class="flex gap-3 flex-wrap items-center">
+            <form method="GET" action="{{ url_for('attendance.export') }}" class="flex gap-3 flex-wrap items-center">
                 <div class="form-group" style="margin-bottom: 0; min-width: 140px;">
                     <label class="form-label" style="font-size: 12px;">From Date</label>
                     <input type="date" name="start_date" class="form-input" value="{{ date_from }}">

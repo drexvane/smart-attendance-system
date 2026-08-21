@@ -1,0 +1,158 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-attendance-system"
+version = "2.0.0"
+description = "Face recognition based attendance system with anti-proxy confirmation"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Kunal Poonia" }]
+
+dependencies = [
+    # Web framework
+    "Flask==3.1.3",
+    "Flask-SQLAlchemy==3.1.1",
+    "Flask-Migrate==4.1.0",
+    "Flask-Login==0.6.3",
+    "Flask-WTF==1.3.0",
+    "Flask-Limiter==4.1.1",
+    "flask-swagger-ui==5.32.13",
+    "Werkzeug==3.1.8",
+    "SQLAlchemy==2.0.52",
+    "alembic==1.19.1",
+    # Computer vision.  contrib build is REQUIRED: cv2.face.LBPHFaceRecognizer_create
+    # ships only in opencv-contrib.  Pinned to the 4.x line on purpose -- 5.x is a
+    # major API break.
+    "opencv-contrib-python-headless==4.14.0.94",
+    "numpy>=1.26,<3",
+    "Pillow==12.3.0",
+    # Export + sanitisation.  Both were imported by the old code but missing from
+    # requirements.txt, so Excel export and XSS stripping silently degraded.
+    "openpyxl==3.1.5",
+    "bleach==6.4.0",
+    # Config + validation
+    "python-dotenv==1.2.3",
+    "email-validator==2.3.0",
+    # Production server
+    "gunicorn==26.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.16.4",
+    "mypy==2.3.1",
+    "bandit[toml]==1.9.4",
+    "pip-audit==2.10.1",
+    "pre-commit>=4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "migrations/versions",
+    "static",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes -- F821 undefined-name is the gate that would have caught
+           # the missing `rate_limit` decorator before it shipped
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "RET", # flake8-return
+    "ARG", # unused arguments
+    "DTZ", # flake8-datetimez -- bans naive datetime.utcnow()
+    "S",   # bandit-equivalent security rules
+]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # function call in default argument -- used by SQLAlchemy defaults
+    "SIM105", # contextlib.suppress is not always clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Asserts are the point of a test, and pytest fixtures arrive as arguments a test may
+# request only for its side effect (a seeded row, a pushed context) without reading.
+"tests/**" = ["S101", "ARG001", "ARG002", "ARG004", "ARG005"]
+"app/config.py" = ["S105"]                # config key *names*, not secrets
+"migrations/env.py" = ["I001"]             # Flask-Migrate template, kept close to upstream
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config -m 'not hardware'"
+markers = [
+    "hardware: requires a physical camera; deselected by default (run with -m hardware)",
+    "integration: exercises the full request stack",
+]
+filterwarnings = [
+    "error::DeprecationWarning:app.*",
+]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = ["app/recognition/camera.py"]  # needs real hardware to exercise
+
+[tool.coverage.report]
+# The floor lives here as well as in the CI invocation so that a local `pytest --cov`
+# fails for the same reason the pipeline does.  75 is set just under the measured 79%:
+# high enough that deleting tests fails the build, low enough that it is not tripped by
+# a legitimate refactor.  Raise it when the number rises, never lower it to go green.
+fail_under = 75
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+[tool.mypy]
+# 3.12 is the primary interpreter.  It also has to be at least 3.12 here because the
+# bundled numpy stubs use `type` statements, which mypy rejects outright under an
+# earlier --python-version and then stops checking.  Ruff's target-version stays at
+# py311 so the source itself remains runnable on the 3.11 floor.
+python_version = "3.12"
+files = ["app"]
+ignore_missing_imports = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+check_untyped_defs = true
+no_implicit_optional = true
+exclude = ["migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["cv2.*", "flask_limiter.*", "bleach.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# ``db.Model`` is created at runtime by Flask-SQLAlchemy, so mypy cannot resolve it as a
+# base class and reports every model as `Name "db.Model" is not defined`.  Silencing that
+# one code here is narrower than dropping the models from type checking altogether.
+module = ["app.models.*"]
+disable_error_code = ["name-defined"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "migrations", "scripts"]
+

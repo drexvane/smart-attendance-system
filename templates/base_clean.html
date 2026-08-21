@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="AI-powered smart attendance system with face recognition">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}Smart Attendance System{% endblock %}</title>
     
     <!-- Favicon -->
@@ -26,21 +27,35 @@
     <!-- Top Navbar -->
     <nav class="navbar">
         <div class="nav-left">
-            <a href="{{ url_for('index') }}" class="nav-brand">
+            <a href="{{ url_for('dashboard.index') }}" class="nav-brand">
                 <div class="nav-brand-icon">
                     <i class="fas fa-user-check"></i>
                 </div>
                 <span>AttendanceAI</span>
             </a>
             <div class="nav-links">
-                <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Dashboard</a>
-                <a href="{{ url_for('students') }}" class="nav-link {% if request.endpoint in ['students', 'register_student'] %}active{% endif %}">Students</a>
-                <a href="{{ url_for('attendance') }}" class="nav-link {% if request.endpoint in ['attendance', 'mark_attendance'] %}active{% endif %}">Attendance</a>
-                <a href="{{ url_for('leave_management') }}" class="nav-link {% if request.endpoint == 'leave_management' %}active{% endif %}">Leave</a>
-                <a href="{{ url_for('reports') }}" class="nav-link {% if request.endpoint == 'reports' %}active{% endif %}">Reports</a>
+                <a href="{{ url_for('dashboard.index') }}" class="nav-link {% if request.endpoint == 'dashboard.index' %}active{% endif %}">Dashboard</a>
+                <a href="{{ url_for('students.list_students') }}" class="nav-link {% if request.endpoint in ['students.list_students', 'students.register', 'students.edit'] %}active{% endif %}">Students</a>
+                <a href="{{ url_for('attendance.list_attendance') }}" class="nav-link {% if request.endpoint in ['attendance.list_attendance', 'attendance.mark_page'] %}active{% endif %}">Attendance</a>
+                <a href="{{ url_for('leave.index') }}" class="nav-link {% if request.endpoint == 'leave.index' %}active{% endif %}">Leave</a>
+                <a href="{{ url_for('attendance.reports') }}" class="nav-link {% if request.endpoint == 'attendance.reports' %}active{% endif %}">Reports</a>
+                <a href="{{ url_for('dashboard.analytics') }}" class="nav-link {% if request.endpoint == 'dashboard.analytics' %}active{% endif %}">Analytics</a>
             </div>
         </div>
         <div class="nav-right">
+            {% if current_user.is_authenticated %}
+                <span class="nav-user" title="{{ current_user.email }}" style="font-size: 13px; color: var(--text-muted); margin-right: 8px;">
+                    <i class="fas fa-user-circle"></i>
+                    {{ current_user.username }}
+                    <small>({{ current_user.role }})</small>
+                </span>
+                <form method="POST" action="{{ url_for('auth.logout') }}" style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="theme-toggle" title="Sign out">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
+                </form>
+            {% endif %}
             <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
                 <i class="fas fa-moon" id="theme-icon"></i>
             </button>
@@ -49,26 +64,29 @@
             </button>
         </div>
     </nav>
-    
+
     <!-- Mobile Navigation -->
     <div class="mobile-nav" id="mobile-nav">
-        <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
+        <a href="{{ url_for('dashboard.index') }}" class="nav-link {% if request.endpoint == 'dashboard.index' %}active{% endif %}">
             <i class="fas fa-home"></i> Dashboard
         </a>
-        <a href="{{ url_for('students') }}" class="nav-link {% if request.endpoint == 'students' %}active{% endif %}">
+        <a href="{{ url_for('students.list_students') }}" class="nav-link {% if request.endpoint == 'students.list_students' %}active{% endif %}">
             <i class="fas fa-users"></i> Students
         </a>
-        <a href="{{ url_for('mark_attendance') }}" class="nav-link {% if request.endpoint == 'mark_attendance' %}active{% endif %}">
+        <a href="{{ url_for('attendance.mark_page') }}" class="nav-link {% if request.endpoint == 'attendance.mark_page' %}active{% endif %}">
             <i class="fas fa-camera"></i> Mark Attendance
         </a>
-        <a href="{{ url_for('attendance') }}" class="nav-link {% if request.endpoint == 'attendance' %}active{% endif %}">
+        <a href="{{ url_for('attendance.list_attendance') }}" class="nav-link {% if request.endpoint == 'attendance.list_attendance' %}active{% endif %}">
             <i class="fas fa-clipboard-list"></i> Records
         </a>
-        <a href="{{ url_for('leave_management') }}" class="nav-link {% if request.endpoint == 'leave_management' %}active{% endif %}">
+        <a href="{{ url_for('leave.index') }}" class="nav-link {% if request.endpoint == 'leave.index' %}active{% endif %}">
             <i class="fas fa-calendar-minus"></i> Leave
         </a>
-        <a href="{{ url_for('reports') }}" class="nav-link {% if request.endpoint == 'reports' %}active{% endif %}">
+        <a href="{{ url_for('attendance.reports') }}" class="nav-link {% if request.endpoint == 'attendance.reports' %}active{% endif %}">
             <i class="fas fa-chart-bar"></i> Reports
+        </a>
+        <a href="{{ url_for('dashboard.analytics') }}" class="nav-link {% if request.endpoint == 'dashboard.analytics' %}active{% endif %}">
+            <i class="fas fa-chart-line"></i> Analytics
         </a>
     </div>
     <main class="main-content">
@@ -101,6 +119,7 @@
     
     <!-- Scripts -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
     <script>
         // Theme Toggle
         function toggleTheme() {
