@@ -35,4 +35,4 @@ python-dotenv==1.2.3
 email-validator==2.3.0
 
 # Production server
-gunicorn==26.1.0
+gunicorn==26.2.0
