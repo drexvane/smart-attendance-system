@@ -22,7 +22,7 @@ dependencies = [
     "flask-swagger-ui==5.32.13",
     "Werkzeug==3.1.8",
     "SQLAlchemy==2.0.52",
-    "alembic==1.19.1",
+    "alembic==1.19.2",
     # Computer vision.  contrib build is REQUIRED: cv2.face.LBPHFaceRecognizer_create
     # ships only in opencv-contrib.  Pinned to the 4.x line on purpose -- 5.x is a
     # major API break.
