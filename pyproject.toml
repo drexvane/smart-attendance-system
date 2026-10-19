@@ -34,7 +34,7 @@ dependencies = [
     "openpyxl==3.1.5",
     "bleach==6.4.0",
     # Config + validation
-    "python-dotenv==1.2.3",
+    "python-dotenv==1.2.4",
     "email-validator==2.3.0",
     # Production server
     "gunicorn==26.1.0",
