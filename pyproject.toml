@@ -28,7 +28,7 @@ dependencies = [
     # major API break.
     "opencv-contrib-python-headless==4.14.0.94",
     "numpy>=1.26,<3",
-    "Pillow==12.3.0",
+    "Pillow==13.0.0",
     # Export + sanitisation.  Both were imported by the old code but missing from
     # requirements.txt, so Excel export and XSS stripping silently degraded.
     "openpyxl==3.1.5",

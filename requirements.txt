@@ -24,7 +24,7 @@ alembic==1.19.1
 # Pinned to the 4.x line deliberately; 5.x is a major API break.
 opencv-contrib-python-headless==4.14.0.94
 numpy>=1.26,<3
-Pillow==12.3.0
+Pillow==13.0.0
 
 # Export + sanitisation
 openpyxl==3.1.5
